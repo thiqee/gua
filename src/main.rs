@@ -28,6 +28,7 @@ const PD: i32 = 6;
 const GP: i32 = 2;
 const MV: usize = 8;
 const FW: f32 = 18.0;
+const CONFIG_FILE: &str = "config.toml";
 
 const HOTKEY_ID: i32 = 1;
 const TRAY_MSG: u32 = WM_APP + 256;
@@ -506,7 +507,7 @@ unsafe extern "system" fn wndproc(
             match id {
                 IDM_TOGGLE => { toggle_win(h, s); return LRESULT(0); }
                 IDM_OPEN_CONFIG => {
-                    let p = to_w("config.toml");
+                    let p = to_w(CONFIG_FILE);
                     ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
                     return LRESULT(0);
                 }
@@ -697,14 +698,14 @@ unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         hide_clear(h, s);
     } else {
         // 按需重载配置
-        let cur = std::fs::metadata("config.toml")
+        let cur = std::fs::metadata(CONFIG_FILE)
             .ok()
             .and_then(|m| m.modified().ok());
         let mut font_name = s.font_name.clone();
         let mut font_size = s.font_size;
         let config_changed = s.config_mtime != cur;
         if config_changed {
-            let raw = config::load("config.toml");
+            let raw = config::load(CONFIG_FILE);
             font_name = cfg_str(&raw, "_font", &s.font_name);
             font_size = cfg_f32(&raw, "_font_size", s.font_size);
             s.max_results = cfg_usize(&raw, "_max_results", s.max_results);
@@ -725,7 +726,10 @@ unsafe fn toggle_win(h: HWND, s: &mut AppState) {
             // 面板位置：0~100 转为 0.0~1.0 比例
             s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
             s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
-            s.entries = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
+            let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
+            if !new_entries.is_empty() {
+                s.entries = new_entries;
+            }
             s.config_mtime = cur;
             // 应用窗口样式变更
             if s.opacity < 255 {
@@ -755,7 +759,7 @@ unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         s.cursor_pos = 0;
         s.filtered_indices.clear();
         s.sel_index = 0;
-    s.scroll_offset = 0;
+        s.scroll_offset = 0;
         fill_list(s, h);
         // 首次启动或配置变更后重新定位，否则复用上次位置
         if config_changed {
@@ -804,7 +808,7 @@ fn main() -> Result<()> {
         let _ = ReleaseDC(None, screen_dc);
 
         // Config
-        let raw_entries = config::load("config.toml");
+        let raw_entries = config::load(CONFIG_FILE);
         let font_name = cfg_str(&raw_entries, "_font", "Segoe UI");
         let font_size = cfg_f32(&raw_entries, "_font_size", FW);
         let width = cfg_i32(&raw_entries, "_width", WW);
