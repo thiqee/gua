@@ -623,7 +623,7 @@ unsafe extern "system" fn wndproc(
                     }
                 }
                 ImmReleaseContext(h, himc);
-                InvalidateRect(Some(h), None, true);
+                RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             }
             return LRESULT(0);
         }
@@ -631,7 +631,7 @@ unsafe extern "system" fn wndproc(
         WM_IME_ENDCOMPOSITION => {
             s.composing.clear();
             ShowCaret(Some(h));
-            InvalidateRect(Some(h), None, true);
+            RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
         }
 
@@ -687,7 +687,7 @@ unsafe extern "system" fn wndproc(
                         s.filter = s.input_text.clone();
                         fill_list(s, h);
                         update_caret(s, h);
-                        InvalidateRect(Some(h), None, true);
+                        RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
                     return LRESULT(0);
                 }
@@ -711,7 +711,7 @@ unsafe extern "system" fn wndproc(
                         s.input_text.replace_range(s.cursor_pos..next, "");
                         s.filter = s.input_text.clone();
                         fill_list(s, h);
-                        InvalidateRect(Some(h), None, true);
+                        RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
                     return LRESULT(0);
                 }
@@ -775,7 +775,7 @@ unsafe extern "system" fn wndproc(
             s.filter = s.input_text.clone();
             fill_list(s, h);
             update_caret(s, h);
-            InvalidateRect(Some(h), None, true);
+            RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
         }
 

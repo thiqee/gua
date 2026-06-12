@@ -300,6 +300,49 @@ let _ = ReleaseDC(Some(h), dc);
 
 ---
 
+## 经验教训：`InvalidateRect` 异步重绘导致输入/退格时面板闪烁
+
+### 现象
+
+输入字符、按退格或删除键时面板闪烁。
+
+### 排查
+
+涉及 `WM_CHAR`、`VK_BACK`、`VK_DELETE` 的处理流程：
+
+```
+fill_list(s, h)  ← SetWindowPos 改变窗口高度
+InvalidateRect(Some(h), None, true)
+```
+
+`InvalidateRect` 的问题：
+- **异步**：标记无效后要等消息循环下次才处理 `WM_PAINT`，而 `SetWindowPos` 已改变窗口大小并更新了屏幕显示，新区域在 `WM_PAINT` 前是未绘制的
+- **`bErase=true`**：`BeginPaint` 先擦背景再画前景，`WM_PAINT` 虽有全窗口覆盖绘制，但擦画之间产生中间空白帧
+
+### 修复
+
+将 5 处 `InvalidateRect(Some(h), None, true)` 替换为：
+```rust
+RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+```
+
+- `RDW_UPDATENOW` — 同步立即触发 `WM_PAINT`，在函数返回前完成绘制
+- `RDW_NOERASE` — 不擦除背景（`WM_PAINT` 已全窗口覆盖）
+
+### 效果与局限
+
+**这个修复只解决了"异步延迟 + 预擦背景"这部分闪烁。**效果是"比原来好点"，但没有彻底解决。
+
+**仍然闪烁的原因**在 `WM_PAINT` 内部：所有 GDI 绘制（`FillRect`、`fill_round_rect`、`DrawTextW`、逐条 `draw_filtered_item`）都是**逐个直接写屏**的，每个函数调用之间的中间状态（画了背景还没画文字、画了输入框还没列列表）都暴露在屏幕上。这就是剩余的闪烁。
+
+### 教训
+
+1. **`InvalidateRect` 异步 + `bErase=true`** 是明确的闪烁源头，改用 `RedrawWindow` 可消除这层
+2. **但 GDI 直接写屏的逐帧绘制** 才是根本问题，需要内存 DC 双缓冲——在内存中完成全部绘制，最后一次 `BitBlt` 到屏幕——才能彻底解决
+3. 本经验教训记录的是"半程修复"，双缓冲方案待实施后另记
+
+---
+
 ## 构建配置
 
 `Cargo.toml` release 优化：

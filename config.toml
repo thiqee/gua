@@ -59,7 +59,7 @@ _status_font_size = 12
 # 面板水平位置 0~100（0=屏幕左边缘 50=正中间 100=屏幕右边缘），默认 50
 _panel_position_x = 50
 # 面板垂直位置 0~100（0=屏幕顶边 50=正中间 100=屏幕底边），默认 50
-_panel_position_y = 50
+_panel_position_y = 40
 
 
 # ─── 分类 ───
