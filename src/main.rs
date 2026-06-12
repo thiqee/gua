@@ -473,30 +473,44 @@ unsafe extern "system" fn wndproc(
             BeginPaint(h, &mut ps);
             let hdc = ps.hdc;
 
+            // 窗口高度
+            let total = s.filtered_indices.len();
+            let vis = total.min(s.max_results);
+            let lh = s.item_h;
+            let ly = list_y(&s.input_rect);
+            let sh = status_bar_h(s.dpi, s.status_font_size);
+            let win_height = win_h(total, lh, s.eh, s.max_results, sh);
+
+            // 内存 DC 双缓冲
+            let mem_dc = CreateCompatibleDC(Some(hdc));
+            let bmp = CreateCompatibleBitmap(hdc, s.width, win_height);
+            let old_bmp = SelectObject(mem_dc, HGDIOBJ(bmp.0));
+
             // 窗口背景
             let bg_brush = CreateSolidBrush(colorref(s.theme_color));
-            FillRect(hdc, &ps.rcPaint, bg_brush);
+            let full_rect = RECT { left: 0, top: 0, right: s.width, bottom: win_height };
+            FillRect(mem_dc, &full_rect, bg_brush);
             let _ = DeleteObject(HGDIOBJ(bg_brush.0));
 
             // 输入框
             let argb = 0xFF000000 | s.input_bg_color;
             let ir = &s.input_rect;
             let ic = (s.round_corner * 3 / 4).max(1);
-            fill_round_rect(hdc, ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top, ic, argb);
+            fill_round_rect(mem_dc, ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top, ic, argb);
 
             if let Some(ref f) = s.hfont {
-                SelectObject(hdc, HGDIOBJ(f.0));
+                SelectObject(mem_dc, HGDIOBJ(f.0));
             }
-            SetBkMode(hdc, OPAQUE);
-            SetBkColor(hdc, colorref(s.input_bg_color));
-            SetTextColor(hdc, colorref(s.text_color));
+            SetBkMode(mem_dc, OPAQUE);
+            SetBkColor(mem_dc, colorref(s.input_bg_color));
+            SetTextColor(mem_dc, colorref(s.text_color));
             let mut r = s.input_rect;
             r.left += 8;
             r.right -= 4;
             let mut ws: Vec<u16> = s.input_text.encode_utf16().collect();
             ws.push(0);
             if !ws.is_empty() && r.right > r.left && r.bottom > r.top {
-                DrawTextW(hdc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                DrawTextW(mem_dc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
 
             // 绘制正在输入的拼音
@@ -504,10 +518,10 @@ unsafe extern "system" fn wndproc(
                 let mut sz = SIZE::default();
                 if !s.input_text.is_empty() {
                     let pws: Vec<u16> = s.input_text.encode_utf16().collect();
-                    GetTextExtentPoint32W(hdc, &pws, &mut sz);
+                    GetTextExtentPoint32W(mem_dc, &pws, &mut sz);
                 }
                 let cx = s.input_rect.left + 8 + sz.cx;
-                SetTextColor(hdc, colorref(s.text_color & 0xC0C0C0 | 0x404040));
+                SetTextColor(mem_dc, colorref(s.text_color & 0xC0C0C0 | 0x404040));
                 let mut cws: Vec<u16> = s.composing.encode_utf16().collect();
                 cws.push(0);
                 let mut cr = RECT {
@@ -516,28 +530,32 @@ unsafe extern "system" fn wndproc(
                     right: s.input_rect.right,
                     bottom: s.input_rect.bottom,
                 };
-                DrawTextW(hdc, &mut cws, &mut cr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                SetTextColor(hdc, colorref(s.text_color));
+                DrawTextW(mem_dc, &mut cws, &mut cr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                SetTextColor(mem_dc, colorref(s.text_color));
             }
 
             // 列表
-            let lh = s.item_h;
-            let total = s.filtered_indices.len();
-            let vis = total.min(s.max_results);
-            let ly = list_y(&s.input_rect);
             let start = s.scroll_offset.min(total.saturating_sub(vis));
             for i in 0..vis {
                 let fi = start + i;
                 if fi >= total { break; }
                 let y = ly + i as i32 * lh;
                 let rc = RECT { left: PD, top: y, right: s.width - PD, bottom: y + lh };
-                draw_filtered_item(hdc, s, fi, &rc);
+                draw_filtered_item(mem_dc, s, fi, &rc);
             }
 
             // 状态栏
             if vis > 0 {
-                redraw_status_bar(hdc, s, ly, vis);
+                redraw_status_bar(mem_dc, s, ly, vis);
             }
+
+            // 一次拷屏
+            BitBlt(hdc, 0, 0, s.width, win_height, Some(mem_dc), 0, 0, SRCCOPY);
+
+            // 清理内存 DC
+            SelectObject(mem_dc, old_bmp);
+            let _ = DeleteObject(HGDIOBJ(bmp.0));
+            let _ = DeleteDC(mem_dc);
 
             EndPaint(h, &ps);
             return LRESULT(0);

@@ -329,17 +329,55 @@ RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
 - `RDW_UPDATENOW` — 同步立即触发 `WM_PAINT`，在函数返回前完成绘制
 - `RDW_NOERASE` — 不擦除背景（`WM_PAINT` 已全窗口覆盖）
 
-### 效果与局限
+### 第一次修复（半程）
 
-**这个修复只解决了"异步延迟 + 预擦背景"这部分闪烁。**效果是"比原来好点"，但没有彻底解决。
+上述改动消除了异步延迟 + 预擦背景导致的闪烁，但输入/退格时面板仍有闪烁，因为问题还有第二层。
 
-**仍然闪烁的原因**在 `WM_PAINT` 内部：所有 GDI 绘制（`FillRect`、`fill_round_rect`、`DrawTextW`、逐条 `draw_filtered_item`）都是**逐个直接写屏**的，每个函数调用之间的中间状态（画了背景还没画文字、画了输入框还没列列表）都暴露在屏幕上。这就是剩余的闪烁。
+### 第二次修复：`WM_PAINT` 内存 DC 双缓冲
+
+#### 剩余闪烁的原因
+
+`WM_PAINT` 内所有 GDI 绘制都是逐个直接写屏的：
+
+```
+FillRect(窗口背景)       → 屏幕显示纯背景
+fill_round_rect(输入框)  → 屏幕显示背景+输入框框体
+DrawTextW(输入框文字)    → 屏幕显示背景+完整输入框
+draw_filtered_item(列表) → 逐条出现
+redraw_status_bar(状态栏)→ 最终完整窗口
+```
+
+每个函数调用之间的中间状态都暴露在屏幕上，产生闪烁。
+
+#### 修复
+
+在 `WM_PAINT` 中使用内存 DC 双缓冲，所有绘制在内存中完成，最后一次性复制到屏幕：
+
+```rust
+let mem_dc = CreateCompatibleDC(Some(hdc));
+let bmp = CreateCompatibleBitmap(hdc, width, height);
+SelectObject(mem_dc, HGDIOBJ(bmp.0));
+// 以下所有绘制函数的 hdc 参数改为 mem_dc
+// ...
+// 一次性复制到屏幕
+BitBlt(hdc, 0, 0, width, height, Some(mem_dc), 0, 0, SRCCOPY);
+// 清理
+SelectObject(mem_dc, old_bmp);
+DeleteObject(HGDIOBJ(bmp.0));
+DeleteDC(mem_dc);
+```
+
+#### 效果
+
+输入、退格、删除时面板无任何闪烁，彻底解决。
 
 ### 教训
 
-1. **`InvalidateRect` 异步 + `bErase=true`** 是明确的闪烁源头，改用 `RedrawWindow` 可消除这层
-2. **但 GDI 直接写屏的逐帧绘制** 才是根本问题，需要内存 DC 双缓冲——在内存中完成全部绘制，最后一次 `BitBlt` 到屏幕——才能彻底解决
-3. 本经验教训记录的是"半程修复"，双缓冲方案待实施后另记
+1. **GDI 直接写屏是闪烁的根本原因**，每个绘制调用都直接暴露中间状态
+2. **内存 DC 双缓冲**是 GDI 下消除闪烁的标准方案：在内存中画完完整一帧，一次 `BitBlt` 到屏幕，用户只看到最终结果
+3. 双缓冲需要提前知道窗口完整尺寸（`CreateCompatibleBitmap` 需要宽高），`WM_PAINT` 中可通过 `win_h()` 计算
+4. `SelectObject` 进出要配对，注意 `HBITMAP` 到 `HGDIOBJ` 的类型转换
+5. 两层问题要分层排查：第一层是异步延迟 + 预擦背景，第二层是逐个写屏的中间状态，不能混为一谈
 
 ---
 
