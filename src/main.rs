@@ -52,6 +52,27 @@ extern "system" {
     fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: Option<unsafe extern "system" fn(*mut EXCEPTION_POINTERS) -> i32>) -> *mut std::ffi::c_void;
 }
 
+#[link(name = "imm32")]
+extern "system" {
+    fn ImmGetContext(hwnd: HWND) -> isize;
+    fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
+    fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
+    fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+struct COMPOSITIONFORM {
+    dwStyle: u32,
+    ptCurrentPos: POINT,
+    rcArea: RECT,
+}
+
+const CFS_FORCE_POSITION: u32 = 0x0020;
+const ISC_SHOWUICOMPOSITIONWINDOW: u32 = 0x80000000;
+const GCS_COMPSTR: u32 = 0x0008;
+const GCS_RESULTSTR: u32 = 0x0800;
+
 #[repr(C)]
 struct EXCEPTION_RECORD {
     exception_code: u32,
@@ -199,6 +220,7 @@ struct AppState {
     input_bg_color: u32,
     accent_color: u32,
     text_color: u32,
+    composing: String,
     config_mtime: Option<std::time::SystemTime>,
     /// 面板水平位置比例 0.0~1.0，由 _panel_position_x 配置计算
     panel_ratio_x: f32,
@@ -443,6 +465,27 @@ unsafe extern "system" fn wndproc(
                 DrawTextW(hdc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
 
+            // 绘制正在输入的拼音
+            if !s.composing.is_empty() {
+                let mut sz = SIZE::default();
+                if !s.input_text.is_empty() {
+                    let pws: Vec<u16> = s.input_text.encode_utf16().collect();
+                    GetTextExtentPoint32W(hdc, &pws, &mut sz);
+                }
+                let cx = s.input_rect.left + 8 + sz.cx;
+                SetTextColor(hdc, colorref(s.text_color & 0xC0C0C0 | 0x404040));
+                let mut cws: Vec<u16> = s.composing.encode_utf16().collect();
+                cws.push(0);
+                let mut cr = RECT {
+                    left: cx,
+                    top: s.input_rect.top,
+                    right: s.input_rect.right,
+                    bottom: s.input_rect.bottom,
+                };
+                DrawTextW(hdc, &mut cws, &mut cr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                SetTextColor(hdc, colorref(s.text_color));
+            }
+
             // 列表
             let lh = s.item_h;
             let total = s.filtered_indices.len();
@@ -482,6 +525,80 @@ unsafe extern "system" fn wndproc(
                 return LRESULT(0);
             }
             return DefWindowProcW(h, msg, wp, lp);
+        }
+
+        WM_IME_SETCONTEXT => {
+            // 禁用组合窗口（白框），让拼音不弹白框
+            return DefWindowProcW(h, msg, wp, LPARAM(lp.0 & !(ISC_SHOWUICOMPOSITIONWINDOW as isize)));
+        }
+
+        WM_IME_STARTCOMPOSITION => {
+            HideCaret(Some(h));
+            let himc = ImmGetContext(h);
+            if himc != 0 {
+                let cf = COMPOSITIONFORM {
+                    dwStyle: CFS_FORCE_POSITION,
+                    ptCurrentPos: POINT { x: s.input_rect.left + 8, y: s.input_rect.bottom + 2 },
+                    rcArea: RECT::default(),
+                };
+                ImmSetCompositionWindow(himc, &cf);
+                ImmReleaseContext(h, himc);
+            }
+            return LRESULT(0);
+        }
+
+        WM_IME_COMPOSITION => {
+            let himc = ImmGetContext(h);
+            if himc != 0 {
+                // 更新位置
+                let cf = COMPOSITIONFORM {
+                    dwStyle: CFS_FORCE_POSITION,
+                    ptCurrentPos: POINT { x: s.input_rect.left + 8, y: s.input_rect.bottom + 2 },
+                    rcArea: RECT::default(),
+                };
+                ImmSetCompositionWindow(himc, &cf);
+
+                // 读取拼音
+                if lp.0 as u32 & GCS_COMPSTR != 0 {
+                    let len = ImmGetCompositionStringW(himc, GCS_COMPSTR, ptr::null_mut(), 0);
+                    if len > 0 {
+                        let bytes = len as usize;
+                        let mut buf = vec![0u16; bytes / 2 + 1];
+                        ImmGetCompositionStringW(himc, GCS_COMPSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
+                        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                        s.composing = String::from_utf16_lossy(&buf[..end]);
+                    } else {
+                        s.composing.clear();
+                    }
+                }
+                // 读取确认后的中文
+                if lp.0 as u32 & GCS_RESULTSTR != 0 {
+                    let len = ImmGetCompositionStringW(himc, GCS_RESULTSTR, ptr::null_mut(), 0);
+                    if len > 0 {
+                        let bytes = len as usize;
+                        let mut buf = vec![0u16; bytes / 2 + 1];
+                        ImmGetCompositionStringW(himc, GCS_RESULTSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
+                        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                        let result = String::from_utf16_lossy(&buf[..end]);
+                        s.input_text.insert_str(s.cursor_pos, &result);
+                        s.cursor_pos += result.len();
+                        s.filter = s.input_text.clone();
+                        s.composing.clear();
+                        fill_list(s, h);
+                        update_caret(s, h);
+                    }
+                }
+                ImmReleaseContext(h, himc);
+                InvalidateRect(Some(h), None, true);
+            }
+            return LRESULT(0);
+        }
+
+        WM_IME_ENDCOMPOSITION => {
+            s.composing.clear();
+            ShowCaret(Some(h));
+            InvalidateRect(Some(h), None, true);
+            return LRESULT(0);
         }
 
         WM_HOTKEY => {
@@ -898,6 +1015,7 @@ fn main() -> Result<()> {
             input_bg_color,
             accent_color,
             text_color,
+            composing: String::new(),
             config_mtime,
             panel_ratio_x,
             panel_ratio_y,

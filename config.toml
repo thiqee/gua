@@ -55,11 +55,11 @@ _accent_color = 4A6FA5
 # 文字颜色 RGB（16进制），默认 CCCCCC
 _text_color = CCCCCC
 # 状态文字字号（如"第3条/共10条"），默认 12
-_status_font_size = 14
+_status_font_size = 12
 # 面板水平位置 0~100（0=屏幕左边缘 50=正中间 100=屏幕右边缘），默认 50
 _panel_position_x = 50
 # 面板垂直位置 0~100（0=屏幕顶边 50=正中间 100=屏幕底边），默认 50
-_panel_position_y = 40
+_panel_position_y = 30
 
 
 # ─── 分类 ───
