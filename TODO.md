@@ -6,7 +6,7 @@
 
 2. **`WM_ACTIVATE` 失焦处理** — 点托盘菜单时窗口失焦会触发隐藏清空，当前用 `suppress_activate` 标记绕，但菜单关闭时还是可能闪退清空。
 
-3. **`fill_list` 只调高度不调左右位置** — 窗口每次弹出都只改高度，如果之前被手动挪过，不会回到配置的位置。
+3. **`fill_list` 只调高度不调左右位置** — 窗口每次弹出都只改高度，如果之前被手动挪过，不会回到配置的位置。且每次调用都执行 `SetWindowPos` + `round_win`（`SetWindowRgn`），即使搜索结果数没变也重复执行，浪费性能。
 
 4. **`seh_filter` 异常回调写 `crash.log`** — 崩溃回调里做文件 IO，堆可能已经坏了，写文件本身可能再崩；而且返回 1 等于告诉系统"我处理好了你别管"，但程序已经不可恢复了。
 
@@ -29,3 +29,5 @@
 11. **GDI+ 函数手写导入** — 没用 `#[link(name = "gdiplus")]`，靠 windows crate 内部链接，不稳定。
 
 12. **`RegisterHotKey` / `SetFocus` 重复 extern 声明** — windows crate 已经导出了，自己又手写一遍，类型用 `u32` 而非枚举。
+
+13. **`WM_IME_COMPOSITION` 中 `lp.0 as u32` 截断** — `lp.0` 是 `isize`（64 位下 8 字节），转 `u32` 截断低 32 位。虽 Win32 消息 `lParam` 高 32 位通常为 0，但不符合规范。
