@@ -538,7 +538,7 @@ unsafe extern "system" fn wndproc(
             if himc != 0 {
                 let cf = COMPOSITIONFORM {
                     dwStyle: CFS_FORCE_POSITION,
-                    ptCurrentPos: POINT { x: s.input_rect.left + 8, y: s.input_rect.bottom + 2 },
+                    ptCurrentPos: POINT { x: s.input_rect.left, y: s.input_rect.bottom },
                     rcArea: RECT::default(),
                 };
                 ImmSetCompositionWindow(himc, &cf);
@@ -553,7 +553,7 @@ unsafe extern "system" fn wndproc(
                 // 更新位置
                 let cf = COMPOSITIONFORM {
                     dwStyle: CFS_FORCE_POSITION,
-                    ptCurrentPos: POINT { x: s.input_rect.left + 8, y: s.input_rect.bottom + 2 },
+                    ptCurrentPos: POINT { x: s.input_rect.left, y: s.input_rect.bottom },
                     rcArea: RECT::default(),
                 };
                 ImmSetCompositionWindow(himc, &cf);
