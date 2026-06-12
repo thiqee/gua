@@ -35,7 +35,7 @@ _font_size = 18
 # 窗口宽度（像素），默认 500
 _width = 500
 # 窗口圆角大小，默认 12
-_round_corner = 20
+_round_corner = 12
 # 窗口是否置顶，默认 true
 _always_on_top = true
 # 窗口透明度 0~255（255=不透明），默认 255

@@ -745,7 +745,7 @@ unsafe extern "system" fn wndproc(
                         if old_vis >= 0 && old_vis < vis as i32 {
                             let y = ly + old_vis * lh;
                             let rc = RECT { left: PD, top: y, right: s.width - PD, bottom: y + lh };
-                            draw_item_hl_text(dc, s, old_sel, &rc, false);
+                            draw_filtered_item(dc, s, old_sel, &rc);
                         }
                         // 新选中项（画高亮 → 白色文字）
                         let new_vis = s.sel_index as i32 - s.scroll_offset as i32;
