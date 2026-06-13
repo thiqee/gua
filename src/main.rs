@@ -4,8 +4,6 @@
 #![cfg(target_os = "windows")]
 #![allow(unused_must_use)]
 
-use std::io::Write;
-
 mod config;
 mod executor;
 mod tray;
@@ -88,11 +86,6 @@ extern "system" {
     fn SetFocus(hwnd: HWND) -> HWND;
 }
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: Option<unsafe extern "system" fn(*mut EXCEPTION_POINTERS) -> i32>) -> *mut std::ffi::c_void;
-}
-
 #[link(name = "imm32")]
 extern "system" {
     fn ImmGetContext(hwnd: HWND) -> isize;
@@ -113,22 +106,6 @@ const CFS_FORCE_POSITION: u32 = 0x0020;
 const ISC_SHOWUICOMPOSITIONWINDOW: u32 = 0x80000000;
 const GCS_COMPSTR: u32 = 0x0008;
 const GCS_RESULTSTR: u32 = 0x0800;
-
-#[repr(C)]
-struct EXCEPTION_RECORD {
-    exception_code: u32,
-    exception_flags: u32,
-    exception_record: *mut EXCEPTION_RECORD,
-    exception_address: *mut std::ffi::c_void,
-    number_parameters: u32,
-    exception_information: [usize; 15],
-}
-
-#[repr(C)]
-struct EXCEPTION_POINTERS {
-    exception_record: *mut EXCEPTION_RECORD,
-    context_record: *mut std::ffi::c_void,
-}
 
 unsafe fn hiword(d: u32) -> u32 { (d >> 16) & 0xFFFF }
 
@@ -942,23 +919,6 @@ unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     }
 }
 
-// ── entry point ─────────────────────────────────────────────────
-
-unsafe extern "system" fn seh_filter(ep: *mut EXCEPTION_POINTERS) -> i32 {
-    if !ep.is_null() {
-        let rec = (*ep).exception_record;
-        if !rec.is_null() {
-            let code = (*rec).exception_code;
-            let addr = (*rec).exception_address;
-            let mut f = std::fs::File::create("crash.log").ok();
-            if let Some(ref mut f) = f {
-                let _ = write!(f, "EXCEPTION code=0x{:08X} addr={:p}\n", code, addr);
-            }
-        }
-    }
-    1
-}
-
 fn main() -> Result<()> {
     let mut gdiplus_token: usize = 0;
     unsafe {
@@ -969,10 +929,6 @@ fn main() -> Result<()> {
             SuppressExternalCodecs: false.into(),
         };
         GdiplusStartup(&mut gdiplus_token, &input, std::ptr::null_mut());
-    }
-
-    unsafe {
-        SetUnhandledExceptionFilter(Some(seh_filter));
     }
 
     std::panic::set_hook(Box::new(|info| {
