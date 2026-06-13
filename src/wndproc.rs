@@ -243,10 +243,6 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_KEYDOWN => {
-            let _ = std::fs::OpenOptions::new().create(true).append(true).open("keydown.log").map(|mut f| {
-                use std::io::Write;
-                let _ = writeln!(f, "WM_KEYDOWN wp=0x{:X}", wp.0 as u32);
-            });
             match wp.0 as u32 {
                 VK_ESCAPE => { hide_clear(h, s); return LRESULT(0); }
                 VK_RETURN => {
