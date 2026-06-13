@@ -71,6 +71,15 @@ fn main() -> Result<()> {
         // 面板位置：0~100（0=左上 50=居中 100=右下），转为 0.0~1.0 比例
         let panel_ratio_x = cfg_f32(&raw_entries, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
         let panel_ratio_y = cfg_f32(&raw_entries, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
+        // 热键
+        let hotkey_str = cfg_str(&raw_entries, "_hotkey", "Alt+Space");
+        let (mod_keys, hotkey_vk) = match parse_hotkey(&hotkey_str) {
+            Some(v) => v,
+            None => {
+                eprintln!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space");
+                (MOD_ALT, VK_SPACE)
+            }
+        };
         let entries: Vec<config::Entry> = raw_entries.into_iter().filter(|e| !e.key.starts_with('_')).collect();
 
         let inst = GetModuleHandleW(None)?;
@@ -146,12 +155,16 @@ fn main() -> Result<()> {
             config_mtime,
             panel_ratio_x,
             panel_ratio_y,
+            mod_keys,
+            hotkey_vk,
         };
 
         let boxed = Box::into_raw(Box::new(state));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, boxed as isize);
 
-        let _ = RegisterHotKey(hwnd, HOTKEY_ID, MOD_ALT, VK_SPACE);
+        if !RegisterHotKey(hwnd, HOTKEY_ID, mod_keys, hotkey_vk).as_bool() {
+            eprintln!("config: 热键 \"{hotkey_str}\" 注册失败，可能被其他程序占用");
+        }
         tray::init(hwnd);
     }
 

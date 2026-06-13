@@ -130,6 +130,23 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
             // 面板位置：0~100 转为 0.0~1.0 比例
             s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
             s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
+            // 热键变更时重新注册（在 into_iter 之前，raw 尚未被消费）
+            let new_hotkey_str = cfg_str(&raw, "_hotkey", "Alt+Space");
+            if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
+                if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
+                    // 先注销旧的，再注册新的（同一 ID 不能重复注册）
+                    UnregisterHotKey(h, HOTKEY_ID);
+                    if RegisterHotKey(h, HOTKEY_ID, new_mod, new_vk).as_bool() {
+                        s.mod_keys = new_mod;
+                        s.hotkey_vk = new_vk;
+                    } else {
+                        eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
+                        RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
+                    }
+                }
+            } else {
+                eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
+            }
             let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
             if !new_entries.is_empty() {
                 s.entries = new_entries;

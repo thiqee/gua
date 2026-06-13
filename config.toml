@@ -32,6 +32,41 @@ _font_size = 18
 
 # ─── 界面设置 ───
 #
+# ── 热键格式 ──
+#
+#   修饰键 + 修饰键 + ... + 按键
+#
+#   规则：
+#     - 至少两个键，第一个必须是修饰键
+#     - 修饰键放在前面，按键放最后，用 + 连接
+#     - 不区分大小写
+#
+#   修饰键（可选多个）：
+#     Alt   Ctrl   Shift   Win
+#
+#   按键（最后一个，可选以下任意一个）：
+#     字母：  A~Z
+#     数字：  0~9
+#     功能键：F1~F24
+#     常用键：Space  Enter  Esc  Tab  Backspace
+#             Delete  Insert  Home  End
+#             PageUp  PageDown
+#             Pause  CapsLock  ScrollLock
+#     方向键：Up  Down  Left  Right
+#     符号键：[  ]  \  ;  '  ,  .  /  -  =  `
+#
+#   示例：
+#     Alt+Space      ← 默认
+#     Ctrl+J
+#     Ctrl+Shift+F
+#     Alt+F1
+#     Ctrl+[
+#     Ctrl+Shift+Space
+#
+_hotkey = Ctrl+J
+
+
+#
 # 窗口宽度（像素），默认 500
 _width = 500
 # 窗口圆角大小，默认 12

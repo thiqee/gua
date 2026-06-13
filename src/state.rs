@@ -25,6 +25,9 @@ pub const IDM_TOGGLE: u16 = 100;
 pub const IDM_OPEN_CONFIG: u16 = 101;
 pub const IDM_EXIT: u16 = 102;
 pub const MOD_ALT: u32 = 1;
+pub const MOD_CONTROL: u32 = 2;
+pub const MOD_SHIFT: u32 = 4;
+pub const MOD_WIN: u32 = 8;
 pub const VK_SPACE: u32 = 0x20;
 pub const VK_ESCAPE: u32 = 0x1B;
 pub const VK_RETURN: u32 = 0x0D;
@@ -33,6 +36,7 @@ pub const VK_RETURN: u32 = 0x0D;
 extern "system" {
     pub fn RegisterHotKey(hwnd: HWND, id: i32, fs_modifiers: u32, vk: u32) -> BOOL;
     pub fn SetFocus(hwnd: HWND) -> HWND;
+    pub fn UnregisterHotKey(hwnd: HWND, id: i32) -> BOOL;
 }
 
 #[repr(C)]
@@ -146,6 +150,97 @@ pub unsafe fn center_win(h: HWND, w: i32, hh: i32, ratio_x: f32, ratio_y: f32) {
     }
 }
 
+// ── 热键解析 ────────────────────────────────────────────────────
+
+fn modifier_bit(name: &str) -> Option<u32> {
+    match name.to_lowercase().as_str() {
+        "alt" => Some(MOD_ALT),
+        "ctrl" | "control" => Some(MOD_CONTROL),
+        "shift" => Some(MOD_SHIFT),
+        "win" | "windows" | "super" => Some(MOD_WIN),
+        _ => None,
+    }
+}
+
+fn vk_code(name: &str) -> Option<u32> {
+    let upper = name.to_uppercase();
+    let bytes = upper.as_bytes();
+
+    // A-Z, 0-9
+    if bytes.len() == 1 {
+        let b = bytes[0];
+        if b'A' <= b && b <= b'Z' {
+            return Some(b as u32);
+        }
+        if b'0' <= b && b <= b'9' {
+            return Some(b as u32);
+        }
+    }
+
+    // F1-F24
+    if bytes.len() >= 2 && bytes.len() <= 3 && bytes[0] == b'F' {
+        if let Ok(n) = upper[1..].parse::<u32>() {
+            if (1..=24).contains(&n) {
+                return Some(0x6F + n);
+            }
+        }
+    }
+
+    match upper.as_str() {
+        "SPACE" => Some(0x20),
+        "ENTER" => Some(0x0D),
+        "ESCAPE" | "ESC" => Some(0x1B),
+        "TAB" => Some(0x09),
+        "BACKSPACE" => Some(0x08),
+        "DELETE" | "DEL" => Some(0x2E),
+        "INSERT" | "INS" => Some(0x2D),
+        "HOME" => Some(0x24),
+        "END" => Some(0x23),
+        "PAGEUP" | "PGUP" => Some(0x21),
+        "PAGEDOWN" | "PGDN" => Some(0x22),
+        "PAUSE" | "BREAK" => Some(0x13),
+        "CAPSLOCK" => Some(0x14),
+        "SCROLLLOCK" => Some(0x91),
+        "UP" => Some(0x26),
+        "DOWN" => Some(0x28),
+        "LEFT" => Some(0x25),
+        "RIGHT" => Some(0x27),
+        "[" | "LBRACKET" => Some(0xDB),
+        "]" | "RBRACKET" => Some(0xDD),
+        "\\" | "BACKSLASH" => Some(0xDC),
+        ";" | "SEMICOLON" => Some(0xBA),
+        "'" | "APOSTROPHE" | "QUOTE" => Some(0xDE),
+        "," | "COMMA" => Some(0xBC),
+        "." | "PERIOD" | "DOT" => Some(0xBE),
+        "/" | "SLASH" => Some(0xBF),
+        "-" | "MINUS" | "HYPHEN" => Some(0xBD),
+        "=" | "EQUALS" | "EQUAL" => Some(0xBB),
+        "`" | "BACKTICK" | "TILDE" | "GRAVE" => Some(0xC0),
+        _ => None,
+    }
+}
+
+/// 解析 "Mod1+Mod2+Key" 格式热键字符串，返回 (modifiers, vk)。
+/// 至少需要两个键，第一个必须是修饰键，最多五个部分。
+pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = s.split('+')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.len() < 2 || parts.len() > 5 {
+        return None;
+    }
+    let mut mods = 0u32;
+    for p in &parts[..parts.len() - 1] {
+        mods |= modifier_bit(p)?;
+    }
+    if mods == 0 {
+        return None;
+    }
+    let vk = vk_code(parts[parts.len() - 1])?;
+    Some((mods, vk))
+}
+
 // ── app state ───────────────────────────────────────────────────
 
 pub struct AppState {
@@ -184,6 +279,10 @@ pub struct AppState {
     pub panel_ratio_x: f32,
     /// 面板垂直位置比例 0.0~1.0，由 _panel_position_y 配置计算
     pub panel_ratio_y: f32,
+    /// 当前热键修饰键位掩码，由 _hotkey 配置解析
+    pub mod_keys: u32,
+    /// 当前热键虚拟键码，由 _hotkey 配置解析
+    pub hotkey_vk: u32,
 }
 
 pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
