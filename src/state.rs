@@ -345,7 +345,7 @@ pub struct AppState {
     pub mod_keys: u32,
     /// 当前热键虚拟键码，由 _hotkey 配置解析
     pub hotkey_vk: u32,
-    /// 黑名单程序 exe 文件名列表（低小写）。当前台窗口在其中时热键不响应。
+    /// 黑名单程序 exe 文件名列表（小写）。当前台窗口在其中时热键不响应。
     pub blacklist: Vec<String>,
 }
 
