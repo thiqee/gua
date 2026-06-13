@@ -66,6 +66,12 @@ _font_size = 18
 _hotkey = Ctrl+J
 
 
+# 黑名单程序（逗号分隔的 exe 文件名，不区分大小写）
+# 当前台窗口是黑名单中的程序时，热键不响应，防止游戏等场景误触
+# 示例：_blacklist = notepad.exe,calc.exe
+_blacklist =
+
+
 #
 # 窗口宽度（像素），默认 500
 _width = 500

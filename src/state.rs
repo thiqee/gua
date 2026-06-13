@@ -241,6 +241,68 @@ pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
     Some((mods, vk))
 }
 
+// ── 黑名单 ──────────────────────────────────────────────────────
+
+/// 解析逗号分隔的黑名单程序列表（exe 文件名，不区分大小写）
+pub fn cfg_blacklist(entries: &[config::Entry], key: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    for entry in entries.iter().filter(|e| e.key == key) {
+        for item in entry.value.split(',') {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() {
+                result.push(trimmed.to_string());
+            }
+        }
+    }
+    result
+}
+
+/// 获取前台窗口的 exe 文件名（小写，不含路径）
+pub unsafe fn get_foreground_exe() -> Option<String> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(
+            dwDesiredAccess: u32,
+            bInheritHandle: i32,
+            dwProcessId: u32,
+        ) -> HANDLE;
+        fn QueryFullProcessImageNameW(
+            hProcess: HANDLE,
+            dwFlags: u32,
+            lpExeName: *mut u16,
+            lpdwSize: &mut u32,
+        ) -> BOOL;
+    }
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    let hwnd = GetForegroundWindow();
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == 0 {
+        return None;
+    }
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if process.0.is_null() {
+        return None;
+    }
+    let mut buf = [0u16; 260];
+    let mut size = buf.len() as u32;
+    let result = if QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut size).as_bool() {
+        let s = String::from_utf16_lossy(&buf[..size as usize]);
+        std::path::Path::new(&s)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_lowercase())
+    } else {
+        None
+    };
+    let _ = CloseHandle(process);
+    result
+}
+
 // ── app state ───────────────────────────────────────────────────
 
 pub struct AppState {
@@ -283,6 +345,8 @@ pub struct AppState {
     pub mod_keys: u32,
     /// 当前热键虚拟键码，由 _hotkey 配置解析
     pub hotkey_vk: u32,
+    /// 黑名单程序 exe 文件名列表（低小写）。当前台窗口在其中时热键不响应。
+    pub blacklist: Vec<String>,
 }
 
 pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {

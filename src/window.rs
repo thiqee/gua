@@ -98,6 +98,15 @@ pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
 }
 
 pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
+    // 黑名单检查：当前台窗口在黑名单中时，热键不响应
+    if !s.blacklist.is_empty() {
+        if let Some(exe) = get_foreground_exe() {
+            if s.blacklist.iter().any(|b| b.eq_ignore_ascii_case(&exe)) {
+                return;
+            }
+        }
+    }
+
     if s.visible {
         hide_clear(h, s);
     } else {
@@ -147,6 +156,8 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
             } else {
                 eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
             }
+            // 重载黑名单
+            s.blacklist = cfg_blacklist(&raw, "_blacklist");
             let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
             if !new_entries.is_empty() {
                 s.entries = new_entries;

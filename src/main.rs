@@ -80,6 +80,8 @@ fn main() -> Result<()> {
                 (MOD_ALT, VK_SPACE)
             }
         };
+        // 黑名单
+        let blacklist = cfg_blacklist(&raw_entries, "_blacklist");
         let entries: Vec<config::Entry> = raw_entries.into_iter().filter(|e| !e.key.starts_with('_')).collect();
 
         let inst = GetModuleHandleW(None)?;
@@ -157,6 +159,7 @@ fn main() -> Result<()> {
             panel_ratio_y,
             mod_keys,
             hotkey_vk,
+            blacklist,
         };
 
         let boxed = Box::into_raw(Box::new(state));
