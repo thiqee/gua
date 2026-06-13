@@ -22,7 +22,7 @@
 
 9. **[不处理] `#![allow(unused_must_use)]`** — Win32 API 编程中大量调用返回 BOOL/Result，失败时程序无法恢复，逐行加 `let _ =` 只会增加 44 处代码噪声，不会提升安全性。保持现状。
 
-10. **`main.rs` 640 行塞了全部逻辑** — 窗口过程、绘制、IME、配置、托盘全部揉一起，没法单元测试。
+10. **[已完成] `main.rs` 拆分为 5 个文件** — 按职责拆为 state、draw、window、wndproc，main.rs 仅保留入口和 main()。
 
 11. **[暂缓] `RegisterHotKey` / `SetFocus` 重复 extern 声明** — windows crate 已经导出了，自己又手写一遍，类型用 `u32` 而非枚举。需要确认 windows crate 中正确函数名后再处理。
 
