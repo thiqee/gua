@@ -14,9 +14,9 @@
 
 6. **[已完成] 配置解析 `split_once('=')`** — 改为 `find('=')` 取第一个 `=`，去掉 `trim_matches('"')`。
 
-7. **`entry_type` 先判 `.exe` 再判 URL** — 如果一条记录同时满足，分类标成"程序"而不是"网址"，实际碰不上。
+7. **[暂缓] `entry_type` 先判 `.exe` 再判 URL** — 如果一条记录同时满足，分类标成"程序"而不是"网址"，实际碰不上，暂不处理。
 
-8. **`SetProcessDPIAware` 过时** — 推荐用 `SetProcessDpiAwareness`，但 Win10/11 上还能跑。
+8. **[不处理] `SetProcessDPIAware` 过时** — windows crate 0.62 中没有导出新 API `SetProcessDpiAwareness`，旧 API 在 Win10/11 上正常工作。保持现状。
 
 ## 代码脏
 
