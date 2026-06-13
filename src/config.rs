@@ -22,10 +22,12 @@ pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
         if line.starts_with('[') && line.ends_with(']') {
             continue;
         }
-        if let Some((k, v)) = line.split_once('=') {
+        if let Some(pos) = line.find('=') {
+            let k = line[..pos].trim();
+            let v = line[pos + 1..].trim();
             entries.push(Entry {
-                key: k.trim().to_string(),
-                value: v.trim().trim_matches('"').to_string(),
+                key: k.to_string(),
+                value: v.to_string(),
             });
         } else if !line.starts_with('[') {
             eprintln!("config: 忽略无法解析的行: {line}");
