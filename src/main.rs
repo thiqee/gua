@@ -241,7 +241,6 @@ struct AppState {
     scroll_offset: usize,
     input_rect: RECT,
     visible: bool,
-    suppress_activate: bool,
     hfont: Option<HFONT>,
     status_hfont: Option<HFONT>,
     status_font_size: f32,
@@ -568,9 +567,6 @@ unsafe extern "system" fn wndproc(
         }
 
         WM_ACTIVATE => {
-            if s.suppress_activate {
-                return DefWindowProcW(h, msg, wp, lp);
-            }
             if wp.0 == 0 {
                 if !s.visible { return LRESULT(0); }
                 if s.hide_on_focus_loss { hide_clear(h, s); }
@@ -661,9 +657,7 @@ unsafe extern "system" fn wndproc(
         TRAY_MSG => {
             match lp.0 as u32 & 0xFFFF {
                 0x0205 => {
-                    s.suppress_activate = true;
                     tray::show_menu(h);
-                    s.suppress_activate = false;
                 }
                 0x0201 => toggle_win(h, s),
                 _ => {}
@@ -1058,7 +1052,6 @@ fn main() -> Result<()> {
             scroll_offset: 0,
             input_rect: RECT { left: PD, top: PD, right: width - PD, bottom: PD + fp + 24 },
             visible: false,
-            suppress_activate: false,
             hfont,
             status_hfont: None,
             status_font_size,
