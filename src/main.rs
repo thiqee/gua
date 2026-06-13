@@ -298,8 +298,11 @@ unsafe fn fill_list(s: &mut AppState, h: HWND) {
         let nh = win_h(0, s.item_h, s.eh, s.max_results, sh);
         let mut rc = RECT::default();
         GetWindowRect(h, &mut rc);
-        SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
-        round_win(h, s.width, nh, s.round_corner);
+        let cur_h = rc.bottom - rc.top;
+        if cur_h != nh {
+            SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
+            round_win(h, s.width, nh, s.round_corner);
+        }
         return;
     }
 
@@ -320,8 +323,11 @@ unsafe fn fill_list(s: &mut AppState, h: HWND) {
     let nh = win_h(n, s.item_h, s.eh, s.max_results, sh);
     let mut rc = RECT::default();
     GetWindowRect(h, &mut rc);
-    SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
-    round_win(h, s.width, nh, s.round_corner);
+    let cur_h = rc.bottom - rc.top;
+    if cur_h != nh {
+        SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
+        round_win(h, s.width, nh, s.round_corner);
+    }
 
     s.sel_index = 0;
     s.scroll_offset = 0;
