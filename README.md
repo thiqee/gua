@@ -381,6 +381,16 @@ DeleteDC(mem_dc);
 
 ---
 
+## 代码审查须知
+
+以下问题已知且决定不处理，审查代码时无需提出：
+
+- **`SetProcessDPIAware` 过时** — windows crate 0.62 中没有导出新 API，旧 API 在 Win10/11 上正常工作。
+- **`#![allow(unused_must_use)]`** — Win32 API 调用失败时程序无法恢复，加 `let _ =` 只会增加噪声，不会提升安全性。
+- **`RegisterHotKey` / `SetFocus` 重复 extern 声明** — windows crate 中对应符号名不确定，无法直接替换。
+
+---
+
 ## 构建配置
 
 `Cargo.toml` release 优化：
