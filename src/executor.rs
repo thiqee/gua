@@ -1,4 +1,11 @@
 use std::process::Command;
+use std::ptr;
+
+use windows::core::{w, PCWSTR};
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+use crate::state::{to_w, pcwstr};
 
 fn url_encode(s: &str) -> String {
     let mut result = String::new();
@@ -25,6 +32,9 @@ pub fn execute(_key: &str, val: &str, query: &str) {
     } else if target.ends_with(".exe") {
         let _ = Command::new(&target).spawn();
     } else {
-        let _ = Command::new("cmd").args(["/c", "start", "", &target]).spawn();
+        let t = to_w(&target);
+        unsafe {
+            let _ = ShellExecuteW(None, w!("open"), pcwstr(&t), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
+        }
     }
 }
