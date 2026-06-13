@@ -590,7 +590,7 @@ unsafe extern "system" fn wndproc(
                 ImmSetCompositionWindow(himc, &cf);
 
                 // 读取拼音
-                if lp.0 as u32 & GCS_COMPSTR != 0 {
+                if lp.0 as usize & GCS_COMPSTR as usize != 0 {
                     let len = ImmGetCompositionStringW(himc, GCS_COMPSTR, ptr::null_mut(), 0);
                     if len > 0 {
                         let bytes = len as usize;
@@ -603,7 +603,7 @@ unsafe extern "system" fn wndproc(
                     }
                 }
                 // 读取确认后的中文
-                if lp.0 as u32 & GCS_RESULTSTR != 0 {
+                if lp.0 as usize & GCS_RESULTSTR as usize != 0 {
                     let len = ImmGetCompositionStringW(himc, GCS_RESULTSTR, ptr::null_mut(), 0);
                     if len > 0 {
                         let bytes = len as usize;
