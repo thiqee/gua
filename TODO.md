@@ -24,8 +24,6 @@
 
 10. **`main.rs` 640 行塞了全部逻辑** — 窗口过程、绘制、IME、配置、托盘全部揉一起，没法单元测试。
 
-11. **GDI+ 函数手写导入** — 没用 `#[link(name = "gdiplus")]`，靠 windows crate 内部链接，不稳定。
+11. **[暂缓] `RegisterHotKey` / `SetFocus` 重复 extern 声明** — windows crate 已经导出了，自己又手写一遍，类型用 `u32` 而非枚举。需要确认 windows crate 中正确函数名后再处理。
 
-12. **[暂缓] `RegisterHotKey` / `SetFocus` 重复 extern 声明** — windows crate 已经导出了，自己又手写一遍，类型用 `u32` 而非枚举。需要确认 windows crate 中正确函数名后再处理。
-
-13. **[已完成] `WM_IME_COMPOSITION` 中 `lp.0 as u32` 截断** — `lp.0` 是 `isize`（64 位下 8 字节），转 `usize` 避免截断。
+12. **[已完成] `WM_IME_COMPOSITION` 中 `lp.0 as u32` 截断** — `lp.0` 是 `isize`（64 位下 8 字节），转 `usize` 避免截断。
