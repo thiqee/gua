@@ -1,4 +1,4 @@
-// KeyHop — 窗口管理
+// Gua — 窗口管理
 
 use std::ptr;
 

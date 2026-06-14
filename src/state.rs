@@ -1,4 +1,4 @@
-// KeyHop — 数据结构、常量、工具函数
+// Gua — 数据结构、常量、工具函数
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;

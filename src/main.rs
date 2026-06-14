@@ -1,4 +1,4 @@
-// KeyHop — Windows 桌面搜索启动器
+// Gua — Windows 桌面搜索启动器
 // 纯 Win32 API，自绘列表，无闪烁
 
 #![cfg(target_os = "windows")]
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
 
         let inst = GetModuleHandleW(None)?;
 
-        let cn = to_w("KeyHop");
+        let cn = to_w("Gua");
         let wc = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc::wndproc),
@@ -98,13 +98,13 @@ fn main() -> Result<()> {
         };
         RegisterClassW(&wc);
 
-        let cn2 = to_w("KeyHop");
+        let cn2 = to_w("Gua");
         let ex_style = WS_EX_TOOLWINDOW
             | if always_on_top { WS_EX_TOPMOST } else { WINDOW_EX_STYLE::default() };
         let hwnd = CreateWindowExW(
             ex_style,
             PCWSTR(cn2.as_ptr()),
-            w!("KeyHop"),
+            w!("Gua"),
             WS_POPUP,
             0, 0, width, 1,
             None,

@@ -1,4 +1,4 @@
-// KeyHop — 自绘函数
+// Gua — 自绘函数
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;

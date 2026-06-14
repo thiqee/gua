@@ -1,4 +1,4 @@
-# KeyHop
+# Gua
 
 快捷键启动器。按下热键弹出搜索框，输入识别码，快速打开网址、文件、文件夹或启动程序。支持自定义热键、搜索引擎、黑名单、IME 中文输入、配置热重载。
 
@@ -25,7 +25,7 @@
 | 窗口圆角 | `SetWindowRgn`（`CreateRoundRectRgn`） | 兼容所有 Windows 版本 |
 | 列表圆角 | GDI+（`GdipFillPath`） | 选中项高亮圆角 |
 | 前台进程检测 | `GetForegroundWindow` + `QueryFullProcessImageNameW`（FFI） | 黑名单功能 |
-| 托盘图标 | `LoadImageW` 加载外置 `KeyHop.ico`，无文件则用系统默认 | 支持自定义替换 |
+| 托盘图标 | `LoadImageW` 加载外置 `gua.ico`，无文件则用系统默认 | 支持自定义替换 |
 
 ### 依赖
 
@@ -121,7 +121,7 @@ bd = https://www.baidu.com/s?wd=
 ### 系统托盘
 
 - 启动时隐藏到系统托盘
-- 右键菜单：打开 KeyHop / 打开配置文件 / 退出
+- 右键菜单：打开 Gua / 打开配置文件 / 退出
 - 左键点击或按热键弹出窗口
 - 点击窗口关闭按钮（X）→ 隐藏而非退出
 

@@ -20,10 +20,10 @@ static mut TRAY_HWND: HWND = HWND(ptr::null_mut());
 pub unsafe fn init(hwnd: HWND) {
     TRAY_HWND = hwnd;
 
-    // 尝试加载当前目录下的 KeyHop.ico
+    // 尝试加载当前目录下的 gua.ico
     let custom_icon = std::env::current_dir()
         .ok()
-        .map(|p| p.join("KeyHop.ico"))
+        .map(|p| p.join("gua.ico"))
         .filter(|p| p.exists())
         .and_then(|ico| {
             let ws: Vec<u16> = ico.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -40,7 +40,7 @@ pub unsafe fn init(hwnd: HWND) {
         ..Default::default()
     };
     nid.hIcon = custom_icon.unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
-    let tip: Vec<u16> = "KeyHop\0".encode_utf16().collect();
+    let tip: Vec<u16> = "Gua\0".encode_utf16().collect();
     for (i, &c) in tip.iter().enumerate() {
         if i < nid.szTip.len() {
             nid.szTip[i] = c;
@@ -66,7 +66,7 @@ pub unsafe fn show_menu(hwnd: HWND) {
         _ => return,
     };
 
-    AppendMenuW(menu, MF_STRING, IDM_TOGGLE as usize, w!("打开 KeyHop"));
+    AppendMenuW(menu, MF_STRING, IDM_TOGGLE as usize, w!("打开 Gua"));
     AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("打开配置文件"));
     AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
     AppendMenuW(menu, MF_STRING, IDM_EXIT as usize, w!("退出"));
