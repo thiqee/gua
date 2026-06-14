@@ -369,3 +369,154 @@ pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
     }
     Ok(font)
 }
+
+// ── 私有字体加载 ────────────────────────────────────────────────
+
+/// 从字体文件的 name table 中读取 Font Family 名称（name ID = 1）
+/// Windows 平台优先，其次 Mac 平台；英文优先，其他语言次之。
+fn read_font_family(data: &[u8]) -> Option<String> {
+    let buf = |off: usize, len: usize| -> Option<&[u8]> {
+        data.get(off..off + len)
+    };
+    let u16be = |off: usize| -> Option<u16> {
+        let b = buf(off, 2)?;
+        Some(u16::from_be_bytes([b[0], b[1]]))
+    };
+    let u32be = |off: usize| -> Option<u32> {
+        let b = buf(off, 4)?;
+        Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+
+    let num_tables = u16be(4)? as usize;
+
+    // 在 table directory 中查找 "name" 表
+    let mut name_off = None;
+    let mut name_len = None;
+    for i in 0..num_tables {
+        let entry = 12 + i * 16;
+        let tag = buf(entry, 4)?;
+        if tag == b"name" {
+            name_off = Some(u32be(entry + 8)? as usize);
+            name_len = Some(u32be(entry + 12)? as usize);
+            break;
+        }
+    }
+    let name_off = name_off?;
+    let name_len = name_len?;
+    let nt = buf(name_off, name_len)?;
+
+    let count = u16be(name_off + 2)? as usize;
+    let string_off = u16be(name_off + 4)? as usize;
+
+    // 收集所有 nameID = 1 的记录，优先 Windows/英文
+    struct Rec {
+        platform: u16,
+        encoding: u16,
+        lang: u16,
+        offset: usize,
+        length: usize,
+    }
+    let mut candidates: Vec<Rec> = Vec::new();
+    for i in 0..count {
+        let r = name_off + 6 + i * 12;
+        let platform = u16be(r)?;
+        let encoding = u16be(r + 2)?;
+        let lang = u16be(r + 4)?;
+        let name_id = u16be(r + 6)?;
+        let length = u16be(r + 8)? as usize;
+        let offset = u16be(r + 10)? as usize;
+        if name_id == 1 {
+            candidates.push(Rec { platform, encoding, lang, offset, length });
+        }
+    }
+
+    // 优先 Windows (platform=3) + 英文 (lang=0x0409)
+    for c in &candidates {
+        if c.platform == 3 && c.lang == 0x0409 {
+            let start = string_off + c.offset;
+            if start + c.length > nt.len() { continue; }
+            let raw = &nt[start..start + c.length];
+            if c.encoding == 1 || c.encoding == 10 {
+                // UTF-16BE
+                let mut u16s = Vec::with_capacity(c.length / 2);
+                for j in (0..c.length).step_by(2) {
+                    if j + 2 <= raw.len() {
+                        u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]]));
+                    }
+                }
+                return Some(String::from_utf16_lossy(&u16s));
+            }
+        }
+    }
+    // 其次 Windows 任意语言
+    for c in &candidates {
+        if c.platform == 3 {
+            let start = string_off + c.offset;
+            if start + c.length > nt.len() { continue; }
+            let raw = &nt[start..start + c.length];
+            if c.encoding == 1 || c.encoding == 10 {
+                let mut u16s = Vec::with_capacity(c.length / 2);
+                for j in (0..c.length).step_by(2) {
+                    if j + 2 <= raw.len() {
+                        u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]]));
+                    }
+                }
+                return Some(String::from_utf16_lossy(&u16s));
+            }
+        }
+    }
+    // 最后 Mac（platform=1，ASCII/MacRoman）
+    for c in &candidates {
+        if c.platform == 1 {
+            let start = string_off + c.offset;
+            if start + c.length > nt.len() { continue; }
+            let raw = &nt[start..start + c.length];
+            return Some(String::from_utf8_lossy(raw).to_string());
+        }
+    }
+    None
+}
+
+/// 扫描 fonts/ 目录，注册第一个字体并返回其家族名称
+pub fn load_private_fonts() -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn AddFontResourceExW(
+            lpszFilename: PCWSTR,
+            fl: u32,
+            pdv: *const std::ffi::c_void,
+        ) -> i32;
+    }
+    const FR_PRIVATE: u32 = 0x10;
+
+    let dir = std::fs::read_dir("fonts").ok()?;
+    let cwd = std::env::current_dir().ok()?;
+
+    let mut entries: Vec<_> = dir.flatten().collect();
+    // 按文件名排序，保证"第一个"稳定
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in &entries {
+        let path = entry.path();
+        let ext = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "ttf" && ext != "otf" {
+            continue;
+        }
+        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
+        let ws: Vec<u16> = full.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
+        }
+        // 读取家族名称
+        if let Ok(data) = std::fs::read(&full) {
+            if let Some(name) = read_font_family(&data) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}

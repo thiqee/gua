@@ -119,7 +119,14 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         let config_changed = s.config_mtime != cur;
         if config_changed {
             let raw = config::load(CONFIG_FILE);
-            font_name = cfg_str(&raw, "_font", &s.font_name);
+            let has_explicit_font = raw.iter().any(|e| e.key == "_font");
+            // 热重载时重新注册 fonts/ 里的字体
+            let private_font_name = crate::state::load_private_fonts();
+            font_name = if has_explicit_font {
+                cfg_str(&raw, "_font", &s.font_name)
+            } else {
+                private_font_name.unwrap_or_else(|| cfg_str(&raw, "_font", &s.font_name))
+            };
             font_size = cfg_f32(&raw, "_font_size", s.font_size);
             s.max_results = cfg_usize(&raw, "_max_results", s.max_results);
             s.width = cfg_i32(&raw, "_width", s.width);

@@ -24,9 +24,19 @@
 
 
 # ─── 字体设置 ───
-# _font = 字体名称（默认 Segoe UI）
+# _font = 字体家族名称（不是文件名！查看方法见下方说明）
 # _font_size = 字号（默认 18）
-_font = Microsoft YaHei
+#
+# 如何查看字体家族名称：
+#   1. 打开 C:\Windows\Fonts 或 fonts/ 文件夹
+#   2. 双击 .ttf / .otf 字体文件
+#   3. 弹出窗口最顶部显示的名称就是家族名称
+#   例如：文件 "SmileySans-Oblique.ttf" 的家族名称是 "得意黑"
+#       文件 "LXGWWenKai-Regular.ttf" 的家族名称是 "LXGW WenKai"
+#
+# 如果你把字体文件放到 fonts/ 目录下，不配 _font 也能自动生效
+# 多个字体时按文件名排序取第一个
+_font = 得意黑
 _font_size = 18
 
 

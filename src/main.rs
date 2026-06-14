@@ -54,7 +54,18 @@ fn main() -> Result<()> {
 
         // Config
         let raw_entries = config::load(CONFIG_FILE);
-        let font_name = cfg_str(&raw_entries, "_font", "Segoe UI");
+        // 检查 _font 是否在配置中显式指定
+        let has_explicit_font = raw_entries.iter().any(|e| e.key == "_font");
+        // 始终加载私有字体（注册到进程），没有显式配置时才自动检测家族名
+        let private_font_name = load_private_fonts();
+        let font_name = if !has_explicit_font {
+            match private_font_name {
+                Some(ref name) => name.clone(),
+                None => cfg_str(&raw_entries, "_font", "Segoe UI"),
+            }
+        } else {
+            cfg_str(&raw_entries, "_font", "Segoe UI")
+        };
         let font_size = cfg_f32(&raw_entries, "_font_size", FW);
         let width = cfg_i32(&raw_entries, "_width", WW);
         let max_results = cfg_usize(&raw_entries, "_max_results", MV);
