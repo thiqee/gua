@@ -4,7 +4,25 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub key: String,
+    /// 原始值（URL / 路径等），不含描述
     pub value: String,
+    /// 由 [分类] 区段头自动捕获
+    pub category: Option<String>,
+    /// 可选的描述文字，取自 value 后最后一个 ` | ` 分隔符
+    pub description: Option<String>,
+}
+
+/// 在 value 中查找最后一个 ` | `（前后带空格的竖线）
+/// 有则拆分为 (实际值, 描述)，无则返回 (原字符串, None)
+fn split_description(s: &str) -> (&str, Option<&str>) {
+    // 从右侧找，避免值中意外出现的 | 被误切
+    if let Some(pos) = s.rfind(" | ") {
+        let val = s[..pos].trim_end();
+        let desc = s[pos + 3..].trim();
+        let desc = if desc.is_empty() { None } else { Some(desc) };
+        return (val, desc);
+    }
+    (s, None)
 }
 
 pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
@@ -14,22 +32,30 @@ pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
     };
 
     let mut entries = Vec::new();
+    let mut current_category: Option<String> = None;
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        // 捕获区段头作为分类
         if line.starts_with('[') && line.ends_with(']') {
+            let cat = line[1..line.len() - 1].trim();
+            current_category = if cat.is_empty() { None } else { Some(cat.to_string()) };
             continue;
         }
         if let Some(pos) = line.find('=') {
             let k = line[..pos].trim();
-            let v = line[pos + 1..].trim();
+            let v_raw = line[pos + 1..].trim();
+            let (value, description) = split_description(v_raw);
             entries.push(Entry {
                 key: k.to_string(),
-                value: v.to_string(),
+                value: value.to_string(),
+                category: current_category.clone(),
+                description: description.map(|d| d.to_string()),
             });
-        } else if !line.starts_with('[') {
+        } else {
             eprintln!("config: 忽略无法解析的行: {line}");
         }
     }

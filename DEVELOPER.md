@@ -268,19 +268,20 @@ b23  = https://www.bilibili.com
 gh   = https://github.com
 
 [程序]
-calc    = C:\Windows\System32\calc.exe
-notepad = C:\Windows\System32\notepad.exe
+calc    = C:\Windows\System32\calc.exe  |  计算器
+notepad = C:\Windows\System32\notepad.exe  |  记事本
 
 [搜索引擎]
-gg = https://www.google.com/search?q=
-bd = https://www.baidu.com/s?wd=
+gg = https://www.google.com/search?q=  |  Google搜索
+bd = https://www.baidu.com/s?wd=  |  百度搜索
 ```
 
 规则：
 - `#` 开头的行是注释（必须独占一行）
 - 空行被忽略
 - `=` 左右允许空格
-- `[分类名]` 仅用于分组，不影响搜索逻辑
+- `[分类名]` 区段头下的条目自动继承该分类，列表显示时优先使用
+- value 后可用 ` | `（空格-竖线-空格）添加描述，有描述的条目在列表中显示描述而非原始 value
 - 以 `_` 开头的 key 为内部配置键
 
 ---

@@ -58,8 +58,9 @@ pub unsafe fn draw_item_hl_text(dc: HDC, s: &AppState, list_index: usize, rect: 
     if let Some(&idx) = s.filtered_indices.get(list_index) {
         if idx < s.entries.len() {
             let e = &s.entries[idx];
-            let tag = entry_type(&e.value);
-            let txt = format!("[{}]  {}  →  {}", tag, e.key, e.value);
+            let tag = e.category.as_deref().unwrap_or_else(|| entry_type(&e.value));
+            let display = e.description.as_deref().unwrap_or(&e.value);
+            let txt = format!("[{}]  {}  →  {}", tag, e.key, display);
             let mut ws: Vec<u16> = txt.encode_utf16().collect();
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, if selected { COLORREF(0xFFFFFF) } else { colorref(s.text_color) });
@@ -97,8 +98,9 @@ pub unsafe fn draw_filtered_item(hdc: HDC, s: &AppState, list_index: usize, rect
     if let Some(&idx) = s.filtered_indices.get(list_index) {
         if idx < s.entries.len() {
             let e = &s.entries[idx];
-            let tag = entry_type(&e.value);
-            let txt = format!("[{}]  {}  →  {}", tag, e.key, e.value);
+            let tag = e.category.as_deref().unwrap_or_else(|| entry_type(&e.value));
+            let display = e.description.as_deref().unwrap_or(&e.value);
+            let txt = format!("[{}]  {}  →  {}", tag, e.key, display);
             let mut ws: Vec<u16> = txt.encode_utf16().collect();
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, if is_sel { COLORREF(0xFFFFFF) } else { colorref(s.text_color) });

@@ -1,6 +1,6 @@
 # Gua
 
-快捷键启动器。按热键弹出搜索框，输入识别码快速打开网址、程序、文件或文件夹。
+Windows平台快捷键启动器。按热键弹出搜索框，输入识别码快速打开网址、程序、文件或文件夹。
 
 支持自定义热键、搜索引擎、黑名单、私有字体、IME 中文输入、配置热重载。
 
@@ -58,11 +58,15 @@ gh = https://github.com
 b23 = https://www.bilibili.com
 
 [程序]
-calc = C:\Windows\System32\calc.exe
+calc = C:\Windows\System32\calc.exe  |  计算器
+notepad = C:\Windows\System32\notepad.exe  |  记事本
 
 [搜索引擎]
-gg = https://www.google.com/search?q=
+gg = https://www.google.com/search?q=  |  Google搜索
 ```
+
+- `[分类名]` 区段头下的条目自动继承该分类，列表显示时优先使用
+- value 后可用 ` | `（空格-竖线-空格）添加描述，有描述的条目在列表中显示描述而非原始 value
 
 ### 常用配置项
 

@@ -115,11 +115,17 @@ _panel_position_y = 40
 # ─── 分类 ───
 #
 # 用 [分类名] 分组，方便管理
-# 分类名仅供阅读参考，不参与搜索逻辑
-# 同一个分类下的条目建议放一起
+# 同一个分类下的条目自动继承该分类名
+# 列表显示时优先显示分类名（而不是自动识别的）
+#
+# 描述语法：
+#   key = value  |  描述文字
+# 有描述的条目在列表中会显示描述，而非原始 value
+# 描述必须放在 value 之后，用空格-竖线-空格分隔
+# 没有 | 的条目照常显示 value 本身
 
-[网址]
-b23 = https://www.bilibili.com
+[网址啊]
+b23 = https://www.bilibili.com | 哔哩哔哩
 bli = https://www.bilibili.com
 blibili = https://www.bilibili.com
 gh = https://github.com
@@ -128,16 +134,16 @@ xigua = https://www.ixigua.com
 youtube = https://www.youtube.com
 zhihu = https://www.zhihu.com
 
-[程序]
-calc = C:\Windows\System32\calc.exe
-notepad = C:\Windows\System32\notepad.exe
+[程序1]
+calc = C:\Windows\System32\calc.exe  |  计算器
+notepad = C:\Windows\System32\notepad.exe  |  记事本
 
 
 [文件或文件夹]
 
 [搜索引擎]
 # 搜索框里输入识别码+空格激活对应的搜索引擎
-bd = https://www.baidu.com/s?wd=
-gg = https://www.google.com/search?q=
+bd = https://www.baidu.com/s?wd=  |  百度搜索
+gg = https://www.google.com/search?q=  |  Google搜索
 
 
