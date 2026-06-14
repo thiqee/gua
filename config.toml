@@ -35,7 +35,7 @@
 #
 # 如果你把字体文件放到 fonts/ 目录下，不配 _font 也能自动生效
 # 多个字体时按文件名排序取第一个
-_font = 得意黑
+_font = Sarasa Term SC SemiBold
 _font_size = 18
 
 
@@ -124,7 +124,7 @@ _panel_position_y = 40
 # 描述必须放在 value 之后，用空格-竖线-空格分隔
 # 没有 | 的条目照常显示 value 本身
 
-[网址啊]
+[网址]
 b23 = https://www.bilibili.com | 哔哩哔哩
 bli = https://www.bilibili.com
 blibili = https://www.bilibili.com
@@ -134,7 +134,7 @@ xigua = https://www.ixigua.com
 youtube = https://www.youtube.com
 zhihu = https://www.zhihu.com
 
-[程序1]
+[程序]
 calc = C:\Windows\System32\calc.exe  |  计算器
 notepad = C:\Windows\System32\notepad.exe  |  记事本
 
