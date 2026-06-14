@@ -1,6 +1,6 @@
 # KeyHop
 
-快捷键启动器。按下 `Alt+Space` 弹出搜索框，输入识别码，快速打开网址、文件、文件夹或启动程序。
+快捷键启动器。按下热键弹出搜索框，输入识别码，快速打开网址、文件、文件夹或启动程序。支持自定义热键、搜索引擎、黑名单、IME 中文输入、配置热重载。
 
 ---
 
@@ -8,7 +8,7 @@
 
 **平台：** Windows
 
-**实现：** 全部功能已完成，可直接使用。
+**全部功能已完成，持续迭代中。**
 
 ---
 
@@ -17,12 +17,14 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 语言 | Rust | edition 2021 |
-| UI | 纯 Win32 API（自绘窗口 + 自绘输入框 + 自绘列表） | 零 UI 框架依赖，全自绘消除闪烁 |
-| 全局热键 | Win32 `RegisterHotKey`（FFI） | `Alt+Space` 弹出 |
+| UI | 纯 Win32 API（自绘窗口 + 自绘输入框 + 自绘列表） | 零 UI 框架依赖，内存 DC 双缓冲消除闪烁 |
+| 全局热键 | Win32 `RegisterHotKey`（FFI）+ 外部函数声明 | 支持自定义组合键 Alt/Ctrl/Shift/Win + 任意键 |
 | 系统托盘 | Win32 `Shell_NotifyIcon`（FFI） | 右键菜单 |
 | 配置解析 | 手写 TOML 子集 | 零依赖，极简 |
 | 字体渲染 | GDI（`CreateFontW` + `DrawTextW`） | 支持自定义字体和字号 |
-| 窗口圆角 | `SetWindowRgn`（`CreateRoundRectRgn`） | 兼容所有 Windows 版本 | |
+| 窗口圆角 | `SetWindowRgn`（`CreateRoundRectRgn`） | 兼容所有 Windows 版本 |
+| 列表圆角 | GDI+（`GdipFillPath`） | 选中项高亮圆角 |
+| 前台进程检测 | `GetForegroundWindow` + `QueryFullProcessImageNameW`（FFI） | 黑名单功能 |
 
 ### 依赖
 
@@ -34,8 +36,12 @@
 
 ```
 src/
-├── main.rs      — 入口：窗口管理、消息循环、热键、自绘 UI 全部逻辑
+├── main.rs      — 入口：窗口注册、消息循环、GDI+ 初始化、热键注册
 ├── config.rs    — 配置加载（解析 config.toml → Vec<Entry>）
+├── state.rs     — 数据结构、常量、工具函数、热键解析、黑名单检测
+├── window.rs    — 窗口管理：显示/隐藏、列表过滤、执行、光标、黑名单检查
+├── draw.rs      — 自绘函数：GDI+ 圆角矩形、列表项绘制、状态栏绘制
+├── wndproc.rs   — 窗口过程：WM_PAINT、WM_CHAR、WM_KEYDOWN、IME 消息、热键响应
 ├── executor.rs  — 执行器（识别码 → 打开 URL / 启动程序 / 打开文件或文件夹）
 └── tray.rs      — 系统托盘图标与右键菜单
 ```
@@ -46,11 +52,60 @@ src/
 
 ### 搜索启动
 
-- 按下 `Alt+Space` 弹出搜索框，自动聚焦输入框
+- 按下热键（默认 `Alt+Space`）弹出搜索框，自动聚焦输入框
 - 输入识别码，下方实时过滤显示匹配条目（前缀匹配）
 - 方向键 `↑` `↓` 选择，`Enter` 执行
 - 执行后自动隐藏窗口
 - `Esc` 或窗口失去焦点 → 隐藏
+
+### 自定义热键
+
+支持任意组合键，配置 `_hotkey` 即可：
+
+```toml
+_hotkey = Ctrl+J
+_hotkey = Ctrl+Shift+F
+_hotkey = Alt+F1
+```
+
+- 至少两个键，第一个必须是修饰键（Alt / Ctrl / Shift / Win）
+- 不区分大小写
+- 热重载时自动重新注册，无需重启
+
+### 黑名单
+
+指定某些程序在前台时热键不响应，防止游戏等场景误触：
+
+```toml
+_blacklist = notepad.exe,calc.exe
+```
+
+- 逗号分隔多个 exe 文件名
+- 不区分大小写
+- 热重载时同步更新
+
+### 搜索引擎
+
+配置文件中添加带 `?q=` 或 `?wd=` 参数的 URL 条目，输入识别码加空格加关键词即可搜索：
+
+```toml
+[搜索引擎]
+gg = https://www.google.com/search?q=
+bd = https://www.baidu.com/s?wd=
+```
+
+用法：`gg 今天天气` → 打开 `https://www.google.com/search?q=今天天气`
+
+### 输入框光标操作
+
+| 按键 | 效果 |
+|---|---|
+| `←` `→` | 在输入文本中移动光标 |
+| `Backspace` | 删除光标前一个字符 |
+| `Delete` | 删除光标后一个字符 |
+| 输入字符 | 在光标位置插入 |
+
+支持中文等 IME 输入法，拼写过程中预编辑文字在输入框内实时显示。
 
 ### 值类型自动判断
 
@@ -66,23 +121,14 @@ src/
 
 - 启动时隐藏到系统托盘
 - 右键菜单：打开 KeyHop / 打开配置文件 / 退出
-- 左键点击或 `Alt+Space` 弹出窗口
+- 左键点击或按热键弹出窗口
 - 点击窗口关闭按钮（X）→ 隐藏而非退出
 
 ### 配置文件热重载
 
-- 每次 `Alt+Space` 弹出时自动检查 `config.toml` 修改时间
+- 每次按热键弹出时自动检查 `config.toml` 修改时间
 - 有变更则立即重新加载，无需重启程序
-
-### 配置内字体设置
-
-在 `[通用]` 分类下使用内部键配置：
-
-```toml
-[通用]
-_font = Microsoft YaHei      # 字体名称，默认 Segoe UI
-_font_size = 20               # 字号（DIP），默认 18
-```
+- 热键、黑名单等所有配置项均支持热重载
 
 ---
 
@@ -200,7 +246,9 @@ s.input_text.replace_range(s.cursor_pos..next, "");
 
 ## 配置文件格式
 
-`config.toml`，支持分类分组：
+`config.toml`，支持分类分组和内部配置键。
+
+### 识别码条目
 
 ```toml
 [网址]
@@ -211,8 +259,9 @@ gh   = https://github.com
 calc    = C:\Windows\System32\calc.exe
 notepad = C:\Windows\System32\notepad.exe
 
-[文件或文件夹]
-docs = D:\Documents
+[搜索引擎]
+gg = https://www.google.com/search?q=
+bd = https://www.baidu.com/s?wd=
 ```
 
 规则：
@@ -220,19 +269,34 @@ docs = D:\Documents
 - 空行被忽略
 - `=` 左右允许空格
 - `[分类名]` 仅用于分组，不影响搜索逻辑
-- 以 `_` 开头的 key 为内部配置键（如 `_font`、`_font_size`）
+- 以 `_` 开头的 key 为内部配置键
 
 ---
 
-## 配置文件重载机制
+## 内部配置键一览
 
-程序**不会**频繁读取配置文件。所有配置项（字体、界面、识别码等）的读取原则：
+| 配置键 | 说明 | 默认值 |
+|---|---|---|
+| `_hotkey` | 热键组合 | `Alt+Space` |
+| `_blacklist` | 黑名单程序（逗号分隔 exe 名） | 空（不过滤） |
+| `_font` | 字体名称 | `Segoe UI` |
+| `_font_size` | 字号 | `18` |
+| `_status_font_size` | 状态栏字号 | `12` |
+| `_width` | 窗口宽度（像素） | `500` |
+| `_round_corner` | 窗口圆角大小 | `12` |
+| `_max_results` | 列表最多显示条数 | `8` |
+| `_theme_color` | 窗口背景色（RGB 十六进制） | `1E1E1E` |
+| `_input_bg_color` | 输入框背景色 | `2A2A2A` |
+| `_accent_color` | 选中项高亮色 | `4A6FA5` |
+| `_text_color` | 文字颜色 | `CCCCCC` |
+| `_opacity` | 窗口透明度（0~255） | `255` |
+| `_always_on_top` | 窗口置顶 | `true` |
+| `_case_sensitive` | 匹配区分大小写 | `true` |
+| `_hide_on_focus_loss` | 失去焦点自动隐藏 | `true` |
+| `_panel_position_x` | 面板水平位置（0~100） | `50` |
+| `_panel_position_y` | 面板垂直位置（0~100） | `50` |
 
-1. **启动时** — 完整读取一次，加载所有配置到内存
-2. **运行时** — 每次按 `Alt+Space` 时检查文件修改时间
-   - **文件没变** — 不读文件，全部用内存中的值
-   - **文件变了** — 完整重新读取，所有配置一次重载
-3. **没有单个配置单独检查** — 避免无谓的性能消耗
+颜色值用 6 位十六进制（RGB），如 `FF0000` 红色、`00FF00` 绿色。
 
 ---
 
