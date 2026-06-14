@@ -57,7 +57,7 @@ gua/
 ```toml
 _hotkey = Alt+Space          # 热键，格式：修饰键+按键
 _blacklist =                 # 黑名单，逗号分隔 exe 名
-_font = Segoe UI             # 字体家族名称
+_font = Segoe UI             # 字体家族名称,双击字体文件，打开的面板中左上角有名称
 _font_size = 18              # 字号
 
 _width = 500                 # 窗口宽度（像素）
