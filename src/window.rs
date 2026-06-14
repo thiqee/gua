@@ -201,7 +201,7 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         s.scroll_offset = 0;
         fill_list(s, h);
         // 首次启动或配置变更后重新定位，否则复用上次位置
-        if config_changed {
+        if config_changed || s.config_mtime.is_none() {
             let sh = status_bar_h(s.dpi, s.status_font_size);
             center_win(h, s.width, win_h(0, s.item_h, s.eh, s.max_results, sh), s.panel_ratio_x, s.panel_ratio_y);
         }

@@ -2,6 +2,7 @@
 // 纯 Win32 API，自绘列表，无闪烁
 
 #![cfg(target_os = "windows")]
+#![windows_subsystem = "windows"]
 #![allow(unused_must_use)]
 
 mod config;
@@ -17,6 +18,14 @@ use std::ptr;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateMutexW(
+        lpMutexAttributes: *const std::ffi::c_void,
+        bInitialOwner: BOOL,
+        lpName: PCWSTR,
+    ) -> HANDLE;
+}
 use windows::Win32::Graphics::GdiPlus::{
     GdiplusStartup, GdiplusShutdown, GdiplusStartupInput as GpStartupInput,
 };
@@ -29,6 +38,16 @@ use crate::state::*;
 
 
 fn main() -> Result<()> {
+    // 单例检查：确保只有一个实例在运行
+    let mutex_name = to_w("Local\\Gua-Singleton-Mutex");
+    let mutex = unsafe { CreateMutexW(std::ptr::null(), BOOL(0), PCWSTR(mutex_name.as_ptr())) };
+    if mutex.0.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        if !mutex.0.is_null() {
+            unsafe { CloseHandle(mutex); }
+        }
+        return Ok(());
+    }
+
     let mut gdiplus_token: usize = 0;
     unsafe {
         let input = GpStartupInput {
