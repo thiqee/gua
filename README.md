@@ -30,7 +30,7 @@ Windows 平台的效率小工具。按热键弹出搜索框，输入识别码快
 
 ## 安装
 
-从 [Releases](https://github.com/你的用户名/gua/releases) 下载最新版本，解压即可运行，无需安装。
+从 [Releases](https://github.com/thiqee/gua/releases) 下载最新版本，解压即可运行，无需安装。
 
 推荐目录结构：
 
