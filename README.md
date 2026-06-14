@@ -25,6 +25,7 @@
 | 窗口圆角 | `SetWindowRgn`（`CreateRoundRectRgn`） | 兼容所有 Windows 版本 |
 | 列表圆角 | GDI+（`GdipFillPath`） | 选中项高亮圆角 |
 | 前台进程检测 | `GetForegroundWindow` + `QueryFullProcessImageNameW`（FFI） | 黑名单功能 |
+| 托盘图标 | `LoadImageW` 加载外置 `KeyHop.ico`，无文件则用系统默认 | 支持自定义替换 |
 
 ### 依赖
 

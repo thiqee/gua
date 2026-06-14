@@ -20,10 +20,10 @@ static mut TRAY_HWND: HWND = HWND(ptr::null_mut());
 pub unsafe fn init(hwnd: HWND) {
     TRAY_HWND = hwnd;
 
-    // 尝试加载 exe 目录下的 KeyHop.ico
-    let custom_icon = std::env::current_exe()
+    // 尝试加载当前目录下的 KeyHop.ico
+    let custom_icon = std::env::current_dir()
         .ok()
-        .map(|p| p.with_file_name("KeyHop.ico"))
+        .map(|p| p.join("KeyHop.ico"))
         .filter(|p| p.exists())
         .and_then(|ico| {
             let ws: Vec<u16> = ico.as_os_str().encode_wide().chain(Some(0)).collect();
