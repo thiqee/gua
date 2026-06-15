@@ -3,6 +3,9 @@ name = "gua"
 version = "0.1.0"
 edition = "2021"
 
+[build-dependencies]
+embed-resource = "2.5"
+
 [dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",

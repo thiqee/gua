@@ -3,11 +3,13 @@
 #![allow(unused_must_use)]
 
 use std::ptr;
-use std::os::windows::ffi::OsStrExt;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+// 编译时嵌入 gua.ico 的字节数据
+static GUA_ICO_DATA: &[u8] = include_bytes!("../gua.ico");
 
 const TRAY_MSG: u32 = super::TRAY_MSG;
 const TRAY_ID: u32 = super::TRAY_ID;
@@ -17,19 +19,31 @@ const IDM_EXIT: u16 = super::IDM_EXIT;
 
 static mut TRAY_HWND: HWND = HWND(ptr::null_mut());
 
+/// 从 .ico 文件字节数据中提取第一个图标条目并创建 HICON
+unsafe fn load_ico_from_bytes(data: &[u8]) -> Option<HICON> {
+    if data.len() < 6 { return None; }
+    let count = u16::from_le_bytes([data[4], data[5]]) as usize;
+    if count == 0 { return None; }
+    // 取第一个条目（ICONDIRENTRY 从偏移 6 开始，每条 16 字节）
+    let entry_off = 6;
+    if entry_off + 16 > data.len() { return None; }
+    let img_off = u32::from_le_bytes([
+        data[entry_off + 12], data[entry_off + 13],
+        data[entry_off + 14], data[entry_off + 15],
+    ]) as usize;
+    let img_size = u32::from_le_bytes([
+        data[entry_off + 8], data[entry_off + 9],
+        data[entry_off + 10], data[entry_off + 11],
+    ]) as usize;
+    if img_off + img_size > data.len() { return None; }
+    CreateIconFromResourceEx(&data[img_off..img_off + img_size], true, 0x00030000, 0, 0, IMAGE_FLAGS(0)).ok()
+}
+
 pub unsafe fn init(hwnd: HWND) {
     TRAY_HWND = hwnd;
 
-    // 尝试加载当前目录下的 gua.ico
-    let custom_icon = std::env::current_dir()
-        .ok()
-        .map(|p| p.join("gua.ico"))
-        .filter(|p| p.exists())
-        .and_then(|ico| {
-            let ws: Vec<u16> = ico.as_os_str().encode_wide().chain(Some(0)).collect();
-            LoadImageW(None, PCWSTR(ws.as_ptr()), IMAGE_ICON, 0, 0, LR_LOADFROMFILE).ok()
-        })
-        .map(|h| HICON(h.0));
+    // 从内嵌的字节数据创建图标
+    let hicon = load_ico_from_bytes(GUA_ICO_DATA).unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
 
     let mut nid = NOTIFYICONDATAW {
         cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -39,7 +53,7 @@ pub unsafe fn init(hwnd: HWND) {
         uCallbackMessage: TRAY_MSG,
         ..Default::default()
     };
-    nid.hIcon = custom_icon.unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
+    nid.hIcon = hicon;
     let tip: Vec<u16> = "Gua\0".encode_utf16().collect();
     for (i, &c) in tip.iter().enumerate() {
         if i < nid.szTip.len() {
