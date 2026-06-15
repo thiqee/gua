@@ -1,19 +1,16 @@
 # Gua
 
-Windows 平台的效率小工具。按热键弹出搜索框，输入识别码快速打开网址、程序、文件或文件夹、使用搜索引擎搜索。
-
-支持自定义热键、搜索引擎、黑名单、私有字体、配置热重载（需要打开一次面板，但改变热键时，需要重启或在系统托盘中点击图标打开一次面板）。
+Windows平台上的效率小工具，呼出搜索框，输入自己设置好的简短识别码回车打开程序，文件，网站。也可以输入搜索引擎的识别码+空格+问题，快速搜索。AI做的。
 
 ---
 
 ## 功能
 
 - **热键呼出**：默认 `Alt+Space`，可自定义任意修饰键组合
-- **前缀搜索**：输入识别码实时过滤，匹配条目即选即开
-- **搜索引擎**：`gg 关键词` 自动拼接 URL 搜索
+- **快速启动**：输入简短的识别码回车直接打开文件，网站
+- **快捷搜索**：`识别码 关键词` 自动拼接识别码对应的搜索引擎 URL和搜索词。注意识别码后有空格
 - **黑名单**：指定程序在前台时热键不响应，防止游戏误触
-- **私有字体**：字体文件放 `fonts/` 目录即可使用，免安装
-- **光标操作**：支持 `←→` 移动、`Backspace`、`Delete`，支持中文输入
+- **自定义字体**：字体文件放 `fonts/` 目录即可使用，免安装。多个字体文件需要在配置文件里指定一个
 - **系统托盘**：后台运行，右键菜单退出
 
 ---
@@ -38,7 +35,6 @@ Windows 平台的效率小工具。按热键弹出搜索框，输入识别码快
 gua/
 ├── gua.exe
 ├── config.toml      # 配置文件（需自行创建）
-├── gua.ico          # 托盘图标（可选，不配则用默认）
 └── fonts/           # 字体目录（可选）
     ├── LXGWWenKai-Regular.ttf
     └── SmileySans-Oblique.ttf
@@ -55,31 +51,50 @@ gua/
 将以下内容保存为 `config.toml`，放在 `gua.exe` 同目录：
 
 ```toml
-_hotkey = Alt+Space          # 热键，格式：修饰键+按键
-_blacklist =                 # 黑名单，逗号分隔 exe 名
-_font = Segoe UI             # 字体家族名称,双击字体文件，打开的面板中左上角有名称
-_font_size = 18              # 字号
+# 热键，格式：修饰键+按键
+_hotkey = Alt+Space
+# 黑名单，逗号分隔 exe 名
+_blacklist =
+# 字体家族名称，双击字体文件查看左上角
+_font = Segoe UI
+# 字号
+_font_size = 18
 
-_width = 500                 # 窗口宽度（像素）
-_round_corner = 12           # 窗口圆角大小
-_always_on_top = true        # 窗口置顶
-_opacity = 255               # 透明度 0~255
-_max_results = 8             # 列表最多显示条数
-_case_sensitive = true       # 匹配是否区分大小写
-_hide_on_focus_loss = true   # 失去焦点自动隐藏
+# 窗口宽度（像素）
+_width = 500
+# 窗口圆角大小
+_round_corner = 12
+# 窗口置顶
+_always_on_top = true
+# 透明度 0~255
+_opacity = 255
+# 列表最多显示条数
+_max_results = 8
+# 匹配是否区分大小写
+_case_sensitive = true
+# 失去焦点自动隐藏
+_hide_on_focus_loss = true
+# 状态栏文字字号
+_status_font_size = 12
 
-_theme_color = 1E1E1E        # 窗口背景色（RGB 十六进制）
-_input_bg_color = 2A2A2A     # 输入框背景色
-_accent_color = 4A6FA5       # 选中项高亮色
-_text_color = CCCCCC         # 文字颜色
+# 窗口背景色（RGB 十六进制）
+_theme_color = 1E1E1E
+# 输入框背景色
+_input_bg_color = 2A2A2A
+# 选中项高亮色
+_accent_color = 4A6FA5
+# 文字颜色
+_text_color = CCCCCC
 
-_panel_position_x = 50       # 面板水平位置 0~100
-_panel_position_y = 50       # 面板垂直位置 0~100
+# 面板水平位置 0~100
+_panel_position_x = 50
+# 面板垂直位置 0~100
+_panel_position_y = 50
 
 # ─── 网址 ───
 [网址]
-gh = https://github.com      # 输入 gh 回车打开 GitHub
-b23 = https://www.bilibili.com
+gh = https://github.com
+bi = https://www.bilibili.com
 
 # ─── 程序 ───
 [程序]
