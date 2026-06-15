@@ -60,6 +60,17 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
             s.filtered_indices.push(i);
         }
     }
+    // 排序：精确匹配优先，其次键名短的优先
+    s.filtered_indices.sort_by(|&a, &b| {
+        let ka = &s.entries[a].key;
+        let kb = &s.entries[b].key;
+        let a_exact = if s.case_sensitive { ka == &key_part } else { ka.eq_ignore_ascii_case(&key_part) };
+        let b_exact = if s.case_sensitive { kb == &key_part } else { kb.eq_ignore_ascii_case(&key_part) };
+        if a_exact != b_exact {
+            return if a_exact { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+        }
+        ka.len().cmp(&kb.len())
+    });
 
     let n = s.filtered_indices.len();
     let sh = status_bar_h(s.dpi, s.status_font_size);
@@ -77,8 +88,29 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
 }
 
 pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
-    if s.sel_index < s.filtered_indices.len() {
-        let idx = s.filtered_indices[s.sel_index];
+    // 有搜索词时（输入包含空格），用精确匹配的识别码执行搜索，忽略列表选中项
+    let idx = if !s.search_query.is_empty() {
+        let key_part = s.filter.split(' ').next().unwrap_or("");
+        // 同名识别码中优先选搜索引擎 URL（http/https 开头且以 = 结尾的 URL 模板）
+        s.entries.iter().enumerate()
+            .filter(|(_, e)| e.key == key_part)
+            .max_by_key(|(_, e)| {
+                let v = &e.value;
+                (v.starts_with("http://") || v.starts_with("https://")) && v.ends_with('=')
+            } as usize)
+            .map(|(i, _)| i)
+    } else {
+        None
+    };
+    // 没有搜索词时走正常的选中项
+    let idx = idx.or_else(|| {
+        if s.sel_index < s.filtered_indices.len() {
+            Some(s.filtered_indices[s.sel_index])
+        } else {
+            None
+        }
+    });
+    if let Some(idx) = idx {
         if idx < s.entries.len() {
             executor::execute(&s.entries[idx].key, &s.entries[idx].value, &s.search_query);
             hide_clear(h, s);
