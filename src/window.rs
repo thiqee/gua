@@ -97,6 +97,84 @@ pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
     }
 }
 
+/// 重载配置文件，返回 (配置是否变更, 更新后的字体名, 更新后的字号)
+pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
+    let cur = std::fs::metadata(CONFIG_FILE)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    let mut font_name = s.font_name.clone();
+    let mut font_size = s.font_size;
+    let config_changed = s.config_mtime != cur;
+    if config_changed {
+        let raw = config::load(CONFIG_FILE);
+        let has_explicit_font = raw.iter().any(|e| e.key == "_font");
+        // 热重载时重新注册 fonts/ 里的字体
+        let private_font_name = crate::state::load_private_fonts();
+        font_name = if has_explicit_font {
+            cfg_str(&raw, "_font", &s.font_name)
+        } else {
+            private_font_name.unwrap_or_else(|| cfg_str(&raw, "_font", &s.font_name))
+        };
+        font_size = cfg_f32(&raw, "_font_size", s.font_size);
+        s.max_results = cfg_usize(&raw, "_max_results", s.max_results);
+        s.width = cfg_i32(&raw, "_width", s.width);
+        s.round_corner = cfg_i32(&raw, "_round_corner", s.round_corner);
+        s.hide_on_focus_loss = cfg_bool(&raw, "_hide_on_focus_loss", s.hide_on_focus_loss);
+        s.theme_color = cfg_color(&raw, "_theme_color", s.theme_color);
+        s.input_bg_color = cfg_color(&raw, "_input_bg_color", s.input_bg_color);
+        s.accent_color = cfg_color(&raw, "_accent_color", s.accent_color);
+        s.text_color = cfg_color(&raw, "_text_color", s.text_color);
+        s.status_font_size = cfg_f32(&raw, "_status_font_size", s.status_font_size);
+        if let Some(old) = s.status_hfont.take() {
+            let _ = DeleteObject(HGDIOBJ(old.0));
+        }
+        s.always_on_top = cfg_bool(&raw, "_always_on_top", s.always_on_top);
+        s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
+        s.case_sensitive = cfg_bool(&raw, "_case_sensitive", s.case_sensitive);
+        // 面板位置：0~100 转为 0.0~1.0 比例
+        s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
+        s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
+        // 热键变更时重新注册（在 into_iter 之前，raw 尚未被消费）
+        let new_hotkey_str = cfg_str(&raw, "_hotkey", "Alt+Space");
+        if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
+            if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
+                // 先注销旧的，再注册新的（同一 ID 不能重复注册）
+                UnregisterHotKey(h, HOTKEY_ID);
+                if RegisterHotKey(h, HOTKEY_ID, new_mod, new_vk).as_bool() {
+                    s.mod_keys = new_mod;
+                    s.hotkey_vk = new_vk;
+                } else {
+                    eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
+                    RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
+                }
+            }
+        } else {
+            eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
+        }
+        // 重载黑名单
+        s.blacklist = cfg_blacklist(&raw, "_blacklist");
+        let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
+        s.entries = new_entries;
+        s.config_mtime = cur;
+        // 应用窗口样式变更
+        if s.opacity < 255 {
+            let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
+            if style & WS_EX_LAYERED.0 as isize == 0 {
+                SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
+            }
+            SetLayeredWindowAttributes(h, COLORREF(0), s.opacity, LWA_ALPHA);
+        } else {
+            let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
+            if style & WS_EX_LAYERED.0 as isize != 0 {
+                SetWindowLongPtrW(h, GWL_EXSTYLE, style & !(WS_EX_LAYERED.0 as isize));
+            }
+        }
+        let after = if s.always_on_top { Some(HWND_TOPMOST) } else { Some(HWND_NOTOPMOST) };
+        SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    (config_changed, font_name, font_size)
+}
+
 pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     // 黑名单检查：当前台窗口在黑名单中时，热键不响应
     if !s.blacklist.is_empty() {
@@ -110,82 +188,8 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     if s.visible {
         hide_clear(h, s);
     } else {
-        // 按需重载配置
-        let cur = std::fs::metadata(CONFIG_FILE)
-            .ok()
-            .and_then(|m| m.modified().ok());
-        let mut font_name = s.font_name.clone();
-        let mut font_size = s.font_size;
-        let config_changed = s.config_mtime != cur;
-        if config_changed {
-            let raw = config::load(CONFIG_FILE);
-            let has_explicit_font = raw.iter().any(|e| e.key == "_font");
-            // 热重载时重新注册 fonts/ 里的字体
-            let private_font_name = crate::state::load_private_fonts();
-            font_name = if has_explicit_font {
-                cfg_str(&raw, "_font", &s.font_name)
-            } else {
-                private_font_name.unwrap_or_else(|| cfg_str(&raw, "_font", &s.font_name))
-            };
-            font_size = cfg_f32(&raw, "_font_size", s.font_size);
-            s.max_results = cfg_usize(&raw, "_max_results", s.max_results);
-            s.width = cfg_i32(&raw, "_width", s.width);
-            s.round_corner = cfg_i32(&raw, "_round_corner", s.round_corner);
-            s.hide_on_focus_loss = cfg_bool(&raw, "_hide_on_focus_loss", s.hide_on_focus_loss);
-            s.theme_color = cfg_color(&raw, "_theme_color", s.theme_color);
-            s.input_bg_color = cfg_color(&raw, "_input_bg_color", s.input_bg_color);
-            s.accent_color = cfg_color(&raw, "_accent_color", s.accent_color);
-            s.text_color = cfg_color(&raw, "_text_color", s.text_color);
-            s.status_font_size = cfg_f32(&raw, "_status_font_size", s.status_font_size);
-            if let Some(old) = s.status_hfont.take() {
-                let _ = DeleteObject(HGDIOBJ(old.0));
-            }
-            s.always_on_top = cfg_bool(&raw, "_always_on_top", s.always_on_top);
-            s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
-            s.case_sensitive = cfg_bool(&raw, "_case_sensitive", s.case_sensitive);
-            // 面板位置：0~100 转为 0.0~1.0 比例
-            s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
-            s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
-            // 热键变更时重新注册（在 into_iter 之前，raw 尚未被消费）
-            let new_hotkey_str = cfg_str(&raw, "_hotkey", "Alt+Space");
-            if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
-                if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
-                    // 先注销旧的，再注册新的（同一 ID 不能重复注册）
-                    UnregisterHotKey(h, HOTKEY_ID);
-                    if RegisterHotKey(h, HOTKEY_ID, new_mod, new_vk).as_bool() {
-                        s.mod_keys = new_mod;
-                        s.hotkey_vk = new_vk;
-                    } else {
-                        eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
-                        RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
-                    }
-                }
-            } else {
-                eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
-            }
-            // 重载黑名单
-            s.blacklist = cfg_blacklist(&raw, "_blacklist");
-            let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
-            if !new_entries.is_empty() {
-                s.entries = new_entries;
-            }
-            s.config_mtime = cur;
-            // 应用窗口样式变更
-            if s.opacity < 255 {
-                let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
-                if style & WS_EX_LAYERED.0 as isize == 0 {
-                    SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
-                }
-                SetLayeredWindowAttributes(h, COLORREF(0), s.opacity, LWA_ALPHA);
-            } else {
-                let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
-                if style & WS_EX_LAYERED.0 as isize != 0 {
-                    SetWindowLongPtrW(h, GWL_EXSTYLE, style & !(WS_EX_LAYERED.0 as isize));
-                }
-            }
-            let after = if s.always_on_top { Some(HWND_TOPMOST) } else { Some(HWND_NOTOPMOST) };
-            SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        }
+        let (config_changed, font_name, font_size) = reload_config(h, s);
+
         // 字体变化时重建
         if s.font_name != font_name || (s.font_size - font_size).abs() > 0.5 {
             s.font_name = font_name;

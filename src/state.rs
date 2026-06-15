@@ -405,8 +405,19 @@ fn read_font_family(data: &[u8]) -> Option<String> {
     let name_len = name_len?;
     let nt = buf(name_off, name_len)?;
 
+    let format = u16be(name_off)?;
     let count = u16be(name_off + 2)? as usize;
     let string_off = u16be(name_off + 4)? as usize;
+
+    // 计算 NameRecord 起始偏移：format=1 时有额外的语言标签区
+    let name_record_off = if format == 0 {
+        name_off + 6
+    } else if format == 1 {
+        let lang_tag_count = u16be(name_off + 6)? as usize;
+        name_off + 6 + 2 + lang_tag_count * 12
+    } else {
+        return None;
+    };
 
     // 收集所有 nameID = 1 的记录，优先 Windows/英文
     struct Rec {
@@ -418,7 +429,7 @@ fn read_font_family(data: &[u8]) -> Option<String> {
     }
     let mut candidates: Vec<Rec> = Vec::new();
     for i in 0..count {
-        let r = name_off + 6 + i * 12;
+        let r = name_record_off + i * 12;
         let platform = u16be(r)?;
         let encoding = u16be(r + 2)?;
         let lang = u16be(r + 4)?;

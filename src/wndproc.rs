@@ -289,6 +289,7 @@ pub unsafe extern "system" fn wndproc(
                     let n = s.filtered_indices.len();
                     if n == 0 { return LRESULT(0); }
                     let old_sel = s.sel_index;
+                    let old_offset = s.scroll_offset;
                     if wp.0 as u32 == 0x26 {
                         if s.sel_index > 0 {
                             s.sel_index -= 1;
@@ -306,6 +307,10 @@ pub unsafe extern "system" fn wndproc(
                         }
                     }
                     if old_sel != s.sel_index {
+                        if s.scroll_offset != old_offset {
+                            RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                            return LRESULT(0);
+                        }
                         let ly = list_y(&s.input_rect);
                         let lh = s.item_h;
                         let vis = n.min(s.max_results);
