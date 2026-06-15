@@ -217,7 +217,16 @@ pub unsafe extern "system" fn wndproc(
                 0x0205 => {
                     tray::show_menu(h);
                 }
-                0x0201 => toggle_win(h, s),
+                0x0201 => {
+                    // 如果面板刚因失焦隐藏（<200ms），本次托盘点击不重新打开
+                    if let Some(t) = s.last_hide_time {
+                        if t.elapsed() < std::time::Duration::from_millis(200) {
+                            s.last_hide_time = None;
+                            return LRESULT(0);
+                        }
+                    }
+                    toggle_win(h, s);
+                }
                 _ => {}
             }
             return LRESULT(0);

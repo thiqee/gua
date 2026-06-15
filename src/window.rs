@@ -11,6 +11,7 @@ use crate::executor;
 use crate::state::*;
 
 pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
+    s.last_hide_time = Some(std::time::Instant::now());
     s.visible = false;
     s.filter.clear();
     s.input_text.clear();

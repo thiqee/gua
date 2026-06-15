@@ -190,6 +190,7 @@ fn main() -> Result<()> {
             mod_keys,
             hotkey_vk,
             blacklist,
+            last_hide_time: None,
         };
 
         let boxed = Box::into_raw(Box::new(state));
@@ -213,7 +214,10 @@ fn main() -> Result<()> {
         }
     }
 
-    unsafe { GdiplusShutdown(gdiplus_token); }
+    unsafe {
+        let _ = CloseHandle(mutex);
+        GdiplusShutdown(gdiplus_token);
+    }
     Ok(())
 }
 

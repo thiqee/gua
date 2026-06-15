@@ -347,6 +347,8 @@ pub struct AppState {
     pub hotkey_vk: u32,
     /// 黑名单程序 exe 文件名列表（小写）。当前台窗口在其中时热键不响应。
     pub blacklist: Vec<String>,
+    /// 上次隐藏的时间戳，用于托盘点击防抖（避免失焦隐藏后立即被托盘消息重新唤起）
+    pub last_hide_time: Option<std::time::Instant>,
 }
 
 pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
