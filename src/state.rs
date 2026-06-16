@@ -16,6 +16,8 @@ pub const PD: i32 = 6;
 pub const GP: i32 = 2;
 pub const MV: usize = 8;
 pub const FW: f32 = 18.0;
+pub const FUZZY_MATCH_DEFAULT: bool = true;
+pub const PINYIN_SEARCH_DEFAULT: bool = true;
 pub const CONFIG_FILE: &str = "config.toml";
 
 pub const HOTKEY_ID: i32 = 1;
@@ -349,6 +351,10 @@ pub struct AppState {
     pub blacklist: Vec<String>,
     /// 上次隐藏的时间戳，用于托盘点击防抖（避免失焦隐藏后立即被托盘消息重新唤起）
     pub last_hide_time: Option<std::time::Instant>,
+    /// 是否启用模糊匹配（_fuzzy_match）
+    pub fuzzy_enabled: bool,
+    /// 是否启用拼音搜索（_pinyin_search）
+    pub pinyin_enabled: bool,
 }
 
 pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
@@ -536,7 +542,8 @@ fn to_pinyin(s: &str) -> Option<String> {
 ///   Some(5) = 拼音子串
 ///   Some(6) = 模糊匹配（key，输入至少 2 字符）
 ///   None    = 不匹配
-pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
+/// 参数 fuzzy_enabled/pinyin_enabled 控制对应分支是否跳过。
+pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: bool, pinyin_enabled: bool) -> Option<u8> {
     let (inp, k) = if case_sensitive {
         (input.to_string(), key.to_string())
     } else {
@@ -555,7 +562,7 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
     }
 
     // 4-5：拼音匹配（仅输入为 ASCII 字母时触发）
-    if input.chars().count() >= 2 && input.chars().all(|c| c.is_ascii_alphabetic()) {
+    if pinyin_enabled && input.chars().count() >= 2 && input.chars().all(|c| c.is_ascii_alphabetic()) {
         if let Some(py) = to_pinyin(key) {
             if py.starts_with(&inp) {
                 return Some(4);
@@ -567,7 +574,7 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
     }
 
     // 6：模糊匹配
-    if input.chars().count() >= 2 && fuzzy_match(&inp, &k) {
+    if fuzzy_enabled && input.chars().count() >= 2 && fuzzy_match(&inp, &k) {
         return Some(6);
     }
     None

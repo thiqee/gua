@@ -52,7 +52,7 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
     // 匹配并收集（匹配层级, key长度, 原始索引）
     let mut matched: Vec<(u8, usize, usize)> = Vec::new();
     for (i, e) in s.entries.iter().enumerate() {
-        if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive) {
+        if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive, s.fuzzy_enabled, s.pinyin_enabled) {
             matched.push((level, e.key.len(), i));
         }
     }
@@ -152,6 +152,8 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         s.always_on_top = cfg_bool(&raw, "_always_on_top", s.always_on_top);
         s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
         s.case_sensitive = cfg_bool(&raw, "_case_sensitive", s.case_sensitive);
+        s.fuzzy_enabled = cfg_bool(&raw, "_fuzzy_match", s.fuzzy_enabled);
+        s.pinyin_enabled = cfg_bool(&raw, "_pinyin_search", s.pinyin_enabled);
         // 面板位置：0~100 转为 0.0~1.0 比例
         s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
         s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;

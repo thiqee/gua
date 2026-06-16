@@ -92,6 +92,8 @@ fn main() -> Result<()> {
         let always_on_top = cfg_bool(&raw_entries, "_always_on_top", true);
         let opacity = cfg_usize(&raw_entries, "_opacity", 255).min(255) as u8;
         let case_sensitive = cfg_bool(&raw_entries, "_case_sensitive", true);
+        let fuzzy_enabled = cfg_bool(&raw_entries, "_fuzzy_match", FUZZY_MATCH_DEFAULT);
+        let pinyin_enabled = cfg_bool(&raw_entries, "_pinyin_search", PINYIN_SEARCH_DEFAULT);
         let hide_on_focus_loss = cfg_bool(&raw_entries, "_hide_on_focus_loss", true);
         let theme_color = cfg_color(&raw_entries, "_theme_color", 0x1E1E1E);
         let input_bg_color = cfg_color(&raw_entries, "_input_bg_color", 0x2A2A2A);
@@ -178,6 +180,8 @@ fn main() -> Result<()> {
             always_on_top,
             opacity,
             case_sensitive,
+            fuzzy_enabled,
+            pinyin_enabled,
             hide_on_focus_loss,
             theme_color,
             input_bg_color,
