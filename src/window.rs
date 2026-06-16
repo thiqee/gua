@@ -49,28 +49,16 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
         return;
     }
 
-    // 匹配并收集索引
+    // 匹配并收集（匹配层级, key长度, 原始索引）
+    let mut matched: Vec<(u8, usize, usize)> = Vec::new();
     for (i, e) in s.entries.iter().enumerate() {
-        let matched = if s.case_sensitive {
-            e.key.starts_with(&key_part)
-        } else {
-            e.key.to_lowercase().starts_with(&key_part.to_lowercase())
-        };
-        if matched {
-            s.filtered_indices.push(i);
+        if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive) {
+            matched.push((level, e.key.len(), i));
         }
     }
-    // 排序：精确匹配优先，其次键名短的优先
-    s.filtered_indices.sort_by(|&a, &b| {
-        let ka = &s.entries[a].key;
-        let kb = &s.entries[b].key;
-        let a_exact = if s.case_sensitive { ka == &key_part } else { ka.eq_ignore_ascii_case(&key_part) };
-        let b_exact = if s.case_sensitive { kb == &key_part } else { kb.eq_ignore_ascii_case(&key_part) };
-        if a_exact != b_exact {
-            return if a_exact { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
-        }
-        ka.len().cmp(&kb.len())
-    });
+    // 排序：匹配层级优先（精确>前缀>子串>模糊），同级 key 短的优先
+    matched.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    s.filtered_indices = matched.into_iter().map(|(_, _, i)| i).collect();
 
     let n = s.filtered_indices.len();
     let sh = status_bar_h(s.dpi, s.status_font_size);

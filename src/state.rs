@@ -490,6 +490,56 @@ fn read_font_family(data: &[u8]) -> Option<String> {
     None
 }
 
+// ── 匹配 ────────────────────────────────────────────────────────
+
+/// 模糊匹配：input 的字符按顺序出现在 key 中（不连续即可）
+/// 如 input="gh" → key="GitHub" 匹配（g→G, h→H）
+fn fuzzy_match(input: &str, key: &str) -> bool {
+    let mut key_chars = key.chars();
+    for ic in input.chars() {
+        let mut found = false;
+        for kc in &mut key_chars {
+            if kc == ic {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return false;
+        }
+    }
+    true
+}
+
+/// 返回匹配层级：
+///   Some(1) = 精确匹配（key == input）
+///   Some(2) = 前缀匹配（key 以 input 开头）
+///   Some(3) = 子串匹配（key 包含 input）
+///   Some(4) = 模糊匹配（input 字符按顺序出现在 key 中，输入至少 2 字符）
+///   None    = 不匹配
+pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
+    let (inp, k) = if case_sensitive {
+        (input.to_string(), key.to_string())
+    } else {
+        (input.to_lowercase(), key.to_lowercase())
+    };
+
+    if inp == k {
+        return Some(1);
+    }
+    if k.starts_with(&inp) {
+        return Some(2);
+    }
+    if k.contains(&inp) {
+        return Some(3);
+    }
+    // 输入至少 2 个字符才走模糊匹配，避免单字符命中大量结果
+    if input.chars().count() >= 2 && fuzzy_match(&inp, &k) {
+        return Some(4);
+    }
+    None
+}
+
 /// 扫描 fonts/ 目录，注册第一个字体并返回其家族名称
 pub fn load_private_fonts() -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
