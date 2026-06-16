@@ -74,6 +74,10 @@ _opacity = 255
 _max_results = 8
 # 匹配是否区分大小写
 _case_sensitive = true
+# 模糊匹配（字符按顺序出现即可匹配，输入≥2字符才触发），默认 true
+_fuzzy_match = true
+# 拼音搜索（中文条目名自动转拼音），默认 true
+_pinyin_search = true
 # 失去焦点自动隐藏
 _hide_on_focus_loss = true
 # 状态栏文字字号
