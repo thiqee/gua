@@ -511,11 +511,30 @@ fn fuzzy_match(input: &str, key: &str) -> bool {
     true
 }
 
+/// 将中文 key 转成拼音（不带声调），非中文字符保留原样
+/// 无中文字符时返回 None
+fn to_pinyin(s: &str) -> Option<String> {
+    use pinyin::ToPinyin;
+    let mut result = String::new();
+    let mut has_chinese = false;
+    for c in s.chars() {
+        if let Some(py) = c.to_pinyin() {
+            result.push_str(py.plain());
+            has_chinese = true;
+        } else {
+            result.push(c);
+        }
+    }
+    if has_chinese { Some(result.to_lowercase()) } else { None }
+}
+
 /// 返回匹配层级：
-///   Some(1) = 精确匹配（key == input）
-///   Some(2) = 前缀匹配（key 以 input 开头）
-///   Some(3) = 子串匹配（key 包含 input）
-///   Some(4) = 模糊匹配（input 字符按顺序出现在 key 中，输入至少 2 字符）
+///   Some(1) = 精确匹配（key）
+///   Some(2) = 前缀匹配（key）
+///   Some(3) = 子串匹配（key）
+///   Some(4) = 拼音前缀（输入为 ASCII 且 ≥ 2 字符）
+///   Some(5) = 拼音子串
+///   Some(6) = 模糊匹配（key，输入至少 2 字符）
 ///   None    = 不匹配
 pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
     let (inp, k) = if case_sensitive {
@@ -524,6 +543,7 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
         (input.to_lowercase(), key.to_lowercase())
     };
 
+    // 1-3：直接匹配 key
     if inp == k {
         return Some(1);
     }
@@ -533,9 +553,22 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool) -> Option<u8> {
     if k.contains(&inp) {
         return Some(3);
     }
-    // 输入至少 2 个字符才走模糊匹配，避免单字符命中大量结果
+
+    // 4-5：拼音匹配（仅输入为 ASCII 字母时触发）
+    if input.chars().count() >= 2 && input.chars().all(|c| c.is_ascii_alphabetic()) {
+        if let Some(py) = to_pinyin(key) {
+            if py.starts_with(&inp) {
+                return Some(4);
+            }
+            if py.contains(&inp) {
+                return Some(5);
+            }
+        }
+    }
+
+    // 6：模糊匹配
     if input.chars().count() >= 2 && fuzzy_match(&inp, &k) {
-        return Some(4);
+        return Some(6);
     }
     None
 }
