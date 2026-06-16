@@ -7,7 +7,7 @@ edition = "2021"
 embed-resource = "2.5"
 
 [dependencies]
-pinyin = "0.11"
+pinyin = { version = "0.11", default-features = false, features = ["plain"] }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
