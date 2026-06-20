@@ -78,6 +78,8 @@ _case_sensitive = true
 _fuzzy_match = true
 # 拼音搜索（中文条目名自动转拼音），默认 true
 _pinyin_search = true
+# 多音字追加读音（字=拼音，多个用逗号分隔，不覆盖默认读音）
+# _pinyin_overrides = 茄=qie, 了=le
 # 失去焦点自动隐藏
 _hide_on_focus_loss = true
 # 状态栏文字字号
@@ -175,7 +177,15 @@ calc = C:\Windows\System32\calc.exe  |  计算器
 _fuzzy_match = true
 # 拼音搜索（中文条目名自动转拼音），默认 true
 _pinyin_search = true
+# 多音字追加读音（字=拼音，多个用逗号分隔，不覆盖默认读音）
+_pinyin_overrides = 茄=qie, 了=le
 ```
+
+#### 多音字读音追加
+
+`pinyin` crate 默认对"茄"读作 `jia`（雪茄的茄），在"番茄"中应为 `qie`。
+用 `_pinyin_overrides` 追加正确读音后，`fanqie` 和 `fanjia` 都能匹配到"番茄小说"。
+发现新的多音字问题直接在配置里追加即可，无需改代码。
 
 #### 命令执行
 

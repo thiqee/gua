@@ -52,7 +52,7 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
     // 匹配并收集（匹配层级, key长度, 原始索引）
     let mut matched: Vec<(u8, usize, usize)> = Vec::new();
     for (i, e) in s.entries.iter().enumerate() {
-        if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive, s.fuzzy_enabled, s.pinyin_enabled) {
+        if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive, s.fuzzy_enabled, s.pinyin_enabled, &s.pinyin_overrides) {
             matched.push((level, e.key.len(), i));
         }
     }
@@ -176,6 +176,8 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         }
         // 重载黑名单
         s.blacklist = cfg_blacklist(&raw, "_blacklist");
+        // 重载多音字覆写表
+        s.pinyin_overrides = cfg_pinyin_overrides(&raw, "_pinyin_overrides");
         let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
         s.entries = new_entries;
         s.config_mtime = cur;

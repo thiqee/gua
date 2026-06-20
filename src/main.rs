@@ -94,6 +94,7 @@ fn main() -> Result<()> {
         let case_sensitive = cfg_bool(&raw_entries, "_case_sensitive", true);
         let fuzzy_enabled = cfg_bool(&raw_entries, "_fuzzy_match", FUZZY_MATCH_DEFAULT);
         let pinyin_enabled = cfg_bool(&raw_entries, "_pinyin_search", PINYIN_SEARCH_DEFAULT);
+        let pinyin_overrides = cfg_pinyin_overrides(&raw_entries, "_pinyin_overrides");
         let hide_on_focus_loss = cfg_bool(&raw_entries, "_hide_on_focus_loss", true);
         let theme_color = cfg_color(&raw_entries, "_theme_color", 0x1E1E1E);
         let input_bg_color = cfg_color(&raw_entries, "_input_bg_color", 0x2A2A2A);
@@ -194,6 +195,7 @@ fn main() -> Result<()> {
             mod_keys,
             hotkey_vk,
             blacklist,
+            pinyin_overrides,
             last_hide_time: None,
         };
 

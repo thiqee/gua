@@ -1,5 +1,6 @@
 // Gua — 数据结构、常量、工具函数
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::core::*;
@@ -245,6 +246,31 @@ pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
 
 // ── 黑名单 ──────────────────────────────────────────────────────
 
+/// 解析 _pinyin_overrides 多音字追加读音配置
+/// 格式：_pinyin_overrides = 茄=qie, 了=le  （逗号分隔）
+/// 或分行：
+///   _pinyin_overrides = 茄=qie
+///   _pinyin_overrides = 了=le
+/// 每个字对应一个追加读音列表（不覆盖 crate 默认读音）
+pub fn cfg_pinyin_overrides(entries: &[config::Entry], key: &str) -> HashMap<char, Vec<String>> {
+    let mut map: HashMap<char, Vec<String>> = HashMap::new();
+    for entry in entries.iter().filter(|e| e.key == key) {
+        for part in entry.value.split(',') {
+            let part = part.trim().trim_matches('"').trim_matches('\'');
+            if let Some(pos) = part.find('=') {
+                let ch = part[..pos].trim().chars().next();
+                let py = part[pos + 1..].trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                if let Some(c) = ch {
+                    if !py.is_empty() {
+                        map.entry(c).or_insert_with(Vec::new).push(py);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 /// 解析逗号分隔的黑名单程序列表（exe 文件名，不区分大小写）
 pub fn cfg_blacklist(entries: &[config::Entry], key: &str) -> Vec<String> {
     let mut result = Vec::new();
@@ -355,6 +381,8 @@ pub struct AppState {
     pub fuzzy_enabled: bool,
     /// 是否启用拼音搜索（_pinyin_search）
     pub pinyin_enabled: bool,
+    /// 多音字覆写表：字 → 追加读音列表，匹配时与 crate 默认读音共存
+    pub pinyin_overrides: HashMap<char, Vec<String>>,
 }
 
 pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
@@ -517,21 +545,64 @@ fn fuzzy_match(input: &str, key: &str) -> bool {
     true
 }
 
-/// 将中文 key 转成拼音（不带声调），非中文字符保留原样
-/// 无中文字符时返回 None
-fn to_pinyin(s: &str) -> Option<String> {
+/// 获取单个字符的可选读音列表：crate 默认读音 + 用户覆写读音
+/// 非中文返回字符自身（已小写）
+fn get_readings(c: char, overrides: &HashMap<char, Vec<String>>) -> Vec<String> {
     use pinyin::ToPinyin;
-    let mut result = String::new();
-    let mut has_chinese = false;
-    for c in s.chars() {
-        if let Some(py) = c.to_pinyin() {
-            result.push_str(py.plain());
-            has_chinese = true;
-        } else {
-            result.push(c);
+    let mut readings: Vec<String> = Vec::new();
+    if let Some(py) = c.to_pinyin() {
+        readings.push(py.plain().to_string());
+    }
+    if let Some(extra) = overrides.get(&c) {
+        for r in extra {
+            if !readings.contains(r) {
+                readings.push(r.clone());
+            }
         }
     }
-    if has_chinese { Some(result.to_lowercase()) } else { None }
+    if readings.is_empty() {
+        readings.push(c.to_lowercase().to_string());
+    }
+    readings
+}
+
+/// 逐字前缀匹配：输入能否匹配 key 中从开头逐字消耗的读音
+fn pinyin_prefix_match(inp: &str, key: &str, overrides: &HashMap<char, Vec<String>>) -> bool {
+    let mut remaining = inp;
+    for c in key.chars() {
+        if remaining.is_empty() {
+            return true;
+        }
+        let readings = get_readings(c, overrides);
+        let mut matched = false;
+        for reading in &readings {
+            if remaining.starts_with(reading.as_str()) {
+                remaining = &remaining[reading.len()..];
+                matched = true;
+                break;
+            }
+            // 读音前缀匹配：用户只打了读音的一部分（如 q 还没打完 qie）
+            if reading.starts_with(remaining) {
+                remaining = "";
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return false;
+        }
+    }
+    remaining.is_empty()
+}
+
+/// 拼音子串匹配：输入能从 key 的某个字符位置开始逐字匹配
+fn pinyin_substring_match(inp: &str, key: &str, overrides: &HashMap<char, Vec<String>>) -> bool {
+    for (i, _) in key.char_indices() {
+        if pinyin_prefix_match(inp, &key[i..], overrides) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 返回匹配层级：
@@ -543,7 +614,8 @@ fn to_pinyin(s: &str) -> Option<String> {
 ///   Some(6) = 模糊匹配（key，输入至少 2 字符）
 ///   None    = 不匹配
 /// 参数 fuzzy_enabled/pinyin_enabled 控制对应分支是否跳过。
-pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: bool, pinyin_enabled: bool) -> Option<u8> {
+pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: bool, pinyin_enabled: bool, overrides: &HashMap<char, Vec<String>>) -> Option<u8> {
+    use pinyin::ToPinyin;
     let (inp, k) = if case_sensitive {
         (input.to_string(), key.to_string())
     } else {
@@ -561,15 +633,17 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: 
         return Some(3);
     }
 
-    // 4-5：拼音匹配（仅输入为 ASCII 字母时触发）
+    // 4-5：拼音匹配（逐字尝试，支持多音字覆写）
     if pinyin_enabled && input.chars().count() >= 2 && input.chars().all(|c| c.is_ascii_alphabetic()) {
-        if let Some(py) = to_pinyin(key) {
-            if py.starts_with(&inp) {
-                return Some(4);
-            }
-            if py.contains(&inp) {
-                return Some(5);
-            }
+        // key 不含中文时跳过拼音匹配，走模糊匹配（避免非中文 key 被拼音分支截胡）
+        let key_has_chinese = key.chars().any(|c| c.to_pinyin().is_some());
+        // 拼音匹配始终用小写输入，不受 _case_sensitive 影响（读音数据本身是小写的）
+        let lower_input = input.to_lowercase();
+        if key_has_chinese && pinyin_prefix_match(&lower_input, &k, overrides) {
+            return Some(4);
+        }
+        if key_has_chinese && pinyin_substring_match(&lower_input, &k, overrides) {
+            return Some(5);
         }
     }
 
