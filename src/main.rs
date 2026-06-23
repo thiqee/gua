@@ -207,9 +207,7 @@ fn main() -> Result<()> {
         }
         tray::init(hwnd);
         plugin::load_all(hwnd, &plugin_configs);
-    }
 
-    unsafe {
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
@@ -219,10 +217,13 @@ fn main() -> Result<()> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&mut msg);
         }
-    }
 
-    unsafe {
         plugin::unload_all();
+        // 回收 AppState（对应 Box::into_raw）
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        if ptr != 0 {
+            drop(Box::from_raw(ptr as *mut AppState));
+        }
     }
 
     unsafe {

@@ -31,6 +31,7 @@ pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
+    let content = content.trim_start_matches('\u{FEFF}');
 
     let mut entries = Vec::new();
     let mut current_category: Option<String> = None;

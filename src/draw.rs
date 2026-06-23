@@ -68,7 +68,7 @@ pub unsafe fn draw_item_hl_text(dc: HDC, s: &AppState, list_index: usize, rect: 
                 left: rect.left + 8, top: rect.top + 6,
                 right: rect.right - 4, bottom: rect.bottom - 6,
             };
-            DrawTextW(dc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(dc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         }
     }
     if let Some(old) = old_font {
@@ -108,7 +108,7 @@ pub unsafe fn draw_filtered_item(hdc: HDC, s: &AppState, list_index: usize, rect
                 left: rect.left + 8, top: rect.top + 6,
                 right: rect.right - 4, bottom: rect.bottom - 6,
             };
-            DrawTextW(hdc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(hdc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         }
     }
     if let Some(old) = old_font {

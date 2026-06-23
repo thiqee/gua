@@ -1,6 +1,7 @@
 // System tray icon + context menu (Windows-only, uses windows crate)
 
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Shell::*;
@@ -15,8 +16,8 @@ const IDM_TOGGLE: u16 = super::IDM_TOGGLE;
 const IDM_OPEN_CONFIG: u16 = super::IDM_OPEN_CONFIG;
 const IDM_EXIT: u16 = super::IDM_EXIT;
 
-static mut TRAY_HWND: HWND = HWND(ptr::null_mut());
-static mut TRAY_HICON: HICON = HICON(ptr::null_mut());
+static TRAY_HWND: AtomicUsize = AtomicUsize::new(0);
+static TRAY_HICON: AtomicUsize = AtomicUsize::new(0);
 
 /// 从 .ico 文件字节数据中提取第一个图标条目并创建 HICON
 unsafe fn load_ico_from_bytes(data: &[u8]) -> Option<HICON> {
@@ -39,7 +40,7 @@ unsafe fn load_ico_from_bytes(data: &[u8]) -> Option<HICON> {
 }
 
 pub unsafe fn init(hwnd: HWND) {
-    TRAY_HWND = hwnd;
+    TRAY_HWND.store(hwnd.0 as usize, Ordering::Relaxed);
 
     // 从内嵌的字节数据创建图标
     let hicon = load_ico_from_bytes(GUA_ICO_DATA).unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
@@ -60,18 +61,24 @@ pub unsafe fn init(hwnd: HWND) {
         }
     }
     let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-    TRAY_HICON = hicon;
+    TRAY_HICON.store(hicon.0 as usize, Ordering::Relaxed);
 }
 
 pub unsafe fn destroy() {
-    let _ = DestroyIcon(TRAY_HICON);
-    let nid = NOTIFYICONDATAW {
-        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
-        hWnd: TRAY_HWND,
-        uID: TRAY_ID,
-        ..Default::default()
-    };
-    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+    let hicon = HICON(TRAY_HICON.load(Ordering::Relaxed) as *mut std::ffi::c_void);
+    if !hicon.0.is_null() {
+        let _ = DestroyIcon(hicon);
+    }
+    let hwnd = HWND(TRAY_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
+    if !hwnd.0.is_null() {
+        let nid = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_ID,
+            ..Default::default()
+        };
+        let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+    }
 }
 
 pub unsafe fn show_menu(hwnd: HWND) {

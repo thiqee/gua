@@ -480,7 +480,7 @@ fn read_font_family(data: &[u8]) -> Option<String> {
     // 优先 Windows (platform=3) + 英文 (lang=0x0409)
     for c in &candidates {
         if c.platform == 3 && c.lang == 0x0409 {
-            let start = string_off + c.offset;
+            let Some(start) = string_off.checked_add(c.offset) else { continue; };
             if start + c.length > nt.len() { continue; }
             let raw = &nt[start..start + c.length];
             if c.encoding == 1 || c.encoding == 10 {
@@ -498,7 +498,7 @@ fn read_font_family(data: &[u8]) -> Option<String> {
     // 其次 Windows 任意语言
     for c in &candidates {
         if c.platform == 3 {
-            let start = string_off + c.offset;
+            let Some(start) = string_off.checked_add(c.offset) else { continue; };
             if start + c.length > nt.len() { continue; }
             let raw = &nt[start..start + c.length];
             if c.encoding == 1 || c.encoding == 10 {
@@ -515,7 +515,7 @@ fn read_font_family(data: &[u8]) -> Option<String> {
     // 最后 Mac（platform=1，ASCII/MacRoman）
     for c in &candidates {
         if c.platform == 1 {
-            let start = string_off + c.offset;
+            let Some(start) = string_off.checked_add(c.offset) else { continue; };
             if start + c.length > nt.len() { continue; }
             let raw = &nt[start..start + c.length];
             return Some(String::from_utf8_lossy(raw).to_string());

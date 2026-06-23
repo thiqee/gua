@@ -239,6 +239,12 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         }
         let _ = ShowWindow(h, SW_SHOW);
         let _ = SetForegroundWindow(h);
+        // UIPI 降权：如果 SetForegroundWindow 失败（全屏游戏等），
+        // 尝试 SetWindowPos + HWND_TOP 作为替代方案
+        if GetForegroundWindow() != h {
+            let _ = SetWindowPos(h, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            let _ = SetForegroundWindow(h);
+        }
         let _ = SetFocus(h);
         create_input_caret(h, s);
     }
