@@ -69,7 +69,8 @@ pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
 }
 
 /// 从解析后的配置中提取所有 [plugin.xxx] section 的配置
-/// 返回: { "vd-hotkeys": { "enabled": "true", "switch_left": "Alt+J", ... }, ... }
+/// 键名的 `_` 前缀会被自动去掉（插件内用无前缀的键名读取）
+/// 返回: { "vd-hotkeys": { "enabled": "true", "desktop_0": "Alt+J", ... }, ... }
 pub fn build_plugin_configs(entries: &[Entry]) -> HashMap<String, HashMap<String, String>> {
     let mut map: HashMap<String, HashMap<String, String>> = HashMap::new();
     for e in entries {
@@ -77,7 +78,7 @@ pub fn build_plugin_configs(entries: &[Entry]) -> HashMap<String, HashMap<String
             if let Some(name) = cat.strip_prefix("plugin.") {
                 map.entry(name.to_string())
                     .or_default()
-                    .insert(e.key.clone(), e.value.clone());
+                    .insert(e.key.trim_start_matches('_').to_string(), e.value.clone());
             }
         }
     }
