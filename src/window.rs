@@ -11,6 +11,11 @@ use crate::executor;
 use crate::plugin;
 use crate::state::*;
 
+/// 隐藏窗口并清空状态
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.last_hide_time = Some(std::time::Instant::now());
     s.visible = false;
@@ -25,6 +30,11 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     let _ = ShowWindow(h, SW_HIDE);
 }
 
+/// 填充筛选列表并调整窗口高度
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - `s` 必须是可变的 AppState 引用，且 `s.entries` 等字段须正确初始化
 pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
     // 按第一个空格拆成 key 和搜索词
     let (key_part, query_part) = if let Some(pos) = s.filter.find(' ') {
@@ -37,29 +47,16 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
 
     s.filtered_indices.clear();
 
-    if key_part.is_empty() {
-        let sh = status_bar_h(s.dpi, s.status_font_size);
-        let nh = win_h(0, s.item_h, s.eh, s.max_results, sh);
-        let mut rc = RECT::default();
-        let _ = GetWindowRect(h, &mut rc);
-        let cur_h = rc.bottom - rc.top;
-        if cur_h != nh {
-            let _ = SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
-            round_win(h, s.width, nh, s.round_corner);
+    if !key_part.is_empty() {
+        let mut matched: Vec<(u8, usize, usize)> = Vec::new();
+        for (i, e) in s.entries.iter().enumerate() {
+            if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive, s.fuzzy_enabled, s.pinyin_enabled, &s.pinyin_overrides) {
+                matched.push((level, e.key.len(), i));
+            }
         }
-        return;
+        matched.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        s.filtered_indices = matched.into_iter().map(|(_, _, i)| i).collect();
     }
-
-    // 匹配并收集（匹配层级, key长度, 原始索引）
-    let mut matched: Vec<(u8, usize, usize)> = Vec::new();
-    for (i, e) in s.entries.iter().enumerate() {
-        if let Some(level) = match_level(&key_part, &e.key, s.case_sensitive, s.fuzzy_enabled, s.pinyin_enabled, &s.pinyin_overrides) {
-            matched.push((level, e.key.len(), i));
-        }
-    }
-    // 排序：匹配层级优先（精确>前缀>子串>模糊），同级 key 短的优先
-    matched.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    s.filtered_indices = matched.into_iter().map(|(_, _, i)| i).collect();
 
     let n = s.filtered_indices.len();
     let sh = status_bar_h(s.dpi, s.status_font_size);
@@ -76,6 +73,11 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
     s.scroll_offset = 0;
 }
 
+/// 执行当前选中项
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
     // 有搜索词时（输入包含空格），用精确匹配的识别码执行搜索，忽略列表选中项
     let idx = if !s.search_query.is_empty() {
@@ -107,6 +109,11 @@ pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
     }
 }
 
+/// 重建字体对象
+///
+/// # Safety
+/// - `s` 必须是可变的 AppState 引用
+/// - 旧字体对象会被释放，调用后旧指针不应继续使用
 pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
     if let Some(old) = s.hfont.take() {
         let _ = DeleteObject(HGDIOBJ(old.0));
@@ -120,6 +127,11 @@ pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
 }
 
 /// 重载配置文件，返回 (配置是否变更, 更新后的字体名, 更新后的字号)
+/// 热重载配置（检查 mtime）
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
     let cur = std::fs::metadata(CONFIG_FILE)
         .ok()
@@ -169,11 +181,13 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
                     s.hotkey_vk = new_vk;
                 } else {
                     eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
+                    let _ = std::fs::write("panic.log", format!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键\n"));
                     let _ = RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
                 }
             }
         } else {
             eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
+            let _ = std::fs::write("panic.log", format!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键\n"));
         }
         // 重载黑名单
         s.blacklist = cfg_blacklist(&raw, "_blacklist");
@@ -203,6 +217,11 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
     (config_changed, font_name, font_size)
 }
 
+/// 切换窗口可见状态（显示/隐藏）
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     // 黑名单检查：当前台窗口在黑名单中时，热键不响应
     if !s.blacklist.is_empty() {
@@ -250,6 +269,11 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     }
 }
 
+/// 创建输入光标
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - `s` 必须是有效的 AppState 引用
 pub unsafe fn create_input_caret(h: HWND, s: &AppState) {
     if let Some(ref f) = s.hfont {
         let dc = GetDC(Some(h));
@@ -265,6 +289,11 @@ pub unsafe fn create_input_caret(h: HWND, s: &AppState) {
     }
 }
 
+/// 更新光标位置至当前输入位置
+///
+/// # Safety
+/// - `s` 必须是有效的 AppState 引用
+/// - `h` 必须是有效的窗口句柄，且输入光标须已通过 `create_input_caret` 创建
 pub unsafe fn update_caret(s: &AppState, h: HWND) {
     if !s.visible { return; }
     if let Some(ref f) = s.hfont {
@@ -274,7 +303,8 @@ pub unsafe fn update_caret(s: &AppState, h: HWND) {
         let _ = GetTextMetricsW(dc, &mut tm);
         let caret_h = tm.tmHeight;
         let prefix = &s.input_text[..s.cursor_pos];
-        let ws: Vec<u16> = prefix.encode_utf16().collect();
+        let display = prefix.replace("&", "&&");
+        let ws: Vec<u16> = display.encode_utf16().collect();
         let mut sz = SIZE::default();
         let _ = GetTextExtentPoint32W(dc, &ws, &mut sz);
         let cx = s.input_rect.left + 8 + sz.cx + 1;

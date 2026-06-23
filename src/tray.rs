@@ -39,6 +39,11 @@ unsafe fn load_ico_from_bytes(data: &[u8]) -> Option<HICON> {
     CreateIconFromResourceEx(&data[img_off..img_off + img_size], true, 0x00030000, 0, 0, IMAGE_FLAGS(0)).ok()
 }
 
+/// 初始化托盘图标
+///
+/// # Safety
+/// - `hwnd` 必须是有效的窗口句柄
+/// - 应在窗口创建完成后调用
 pub unsafe fn init(hwnd: HWND) {
     TRAY_HWND.store(hwnd.0 as usize, Ordering::Relaxed);
 
@@ -64,6 +69,10 @@ pub unsafe fn init(hwnd: HWND) {
     TRAY_HICON.store(hicon.0 as usize, Ordering::Relaxed);
 }
 
+/// 销毁托盘图标并释放图标资源
+///
+/// # Safety
+/// - 需确保托盘图标已通过 `init()` 创建
 pub unsafe fn destroy() {
     let hicon = HICON(TRAY_HICON.load(Ordering::Relaxed) as *mut std::ffi::c_void);
     if !hicon.0.is_null() {
@@ -81,6 +90,10 @@ pub unsafe fn destroy() {
     }
 }
 
+/// 显示托盘右键菜单
+///
+/// # Safety
+/// - `hwnd` 必须是有效的窗口句柄
 pub unsafe fn show_menu(hwnd: HWND) {
     let menu = CreatePopupMenu();
     let menu = match menu {

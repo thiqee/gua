@@ -205,7 +205,6 @@ unsafe extern "C" fn log_impl(level: i32, msg: *const i8) {
         2 => "[plugin error]",
         _ => "[plugin]",
     };
-    let _ = eprintln!("{} {}", prefix, s);
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -219,6 +218,10 @@ unsafe extern "C" fn log_impl(level: i32, msg: *const i8) {
 // ── 公共 API ──────────────────────────────────────────────────
 
 /// 加载所有插件（在窗口创建后、消息循环前调用）
+///
+/// # Safety
+/// - `hwnd` 必须是有效的窗口句柄
+/// - 需在消息循环启动前调用，且只调用一次
 pub unsafe fn load_all(
     hwnd: HWND,
     plugin_configs: &HashMap<String, HashMap<String, String>>,
@@ -376,6 +379,10 @@ pub unsafe fn load_all(
 }
 
 /// 卸载所有插件（在消息循环退出后、GdiplusShutdown 前调用）
+/// 卸载所有插件
+///
+/// # Safety
+/// - 需在窗口销毁后、进程退出前调用，只调用一次
 pub unsafe fn unload_all() {
     for i in (0..PLUGINS.len()).rev() {
         let _ = std::panic::catch_unwind(|| {
@@ -390,6 +397,11 @@ pub unsafe fn unload_all() {
 }
 
 /// 分发热键消息，返回 true 表示已被插件处理
+/// 分发热键到对应的插件
+///
+/// # Safety
+/// - `internal_id` 必须来自 `is_plugin_hotkey` 验证的 ID
+/// - 需在插件已加载后调用
 pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
     for i in 0..PLUGINS.len() {
         if PLUGINS[i].internal_to_user.contains_key(&internal_id) {
@@ -408,6 +420,10 @@ pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
 }
 
 /// 通知所有插件配置已重载
+/// 通知所有插件配置已重载
+///
+/// # Safety
+/// - 需在插件已加载后调用
 pub unsafe fn notify_reload(configs: &HashMap<String, HashMap<String, String>>) {
     PLUGIN_CONFIGS = Some(configs.clone());
     for i in 0..PLUGINS.len() {
@@ -422,6 +438,10 @@ pub unsafe fn notify_reload(configs: &HashMap<String, HashMap<String, String>>) 
 }
 
 /// 分发窗口消息给插件，返回 true 表示插件已处理
+/// 分发窗口消息到插件的 on_wndproc 回调
+///
+/// # Safety
+/// - 需在插件已加载后调用
 pub unsafe fn dispatch_wndproc(msg: u32, wp: u64, lp: i64) -> bool {
     for i in 0..PLUGINS.len() {
         if let Some(f) = PLUGINS[i].vtable.on_wndproc {

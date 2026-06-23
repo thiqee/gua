@@ -109,6 +109,7 @@ fn main() -> Result<()> {
             Some(v) => v,
             None => {
                 eprintln!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space");
+                let _ = std::fs::write("panic.log", format!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space\n"));
                 (MOD_ALT, VK_SPACE)
             }
         };
@@ -129,7 +130,9 @@ fn main() -> Result<()> {
             lpszClassName: PCWSTR(cn.as_ptr()),
             ..Default::default()
         };
-        RegisterClassW(&wc);
+        if RegisterClassW(&wc) == 0 {
+            return Err(windows::core::Error::from(HRESULT(-2147467259)));
+        }
 
         let cn2 = to_w("Gua");
         let ex_style = WS_EX_TOOLWINDOW
@@ -203,7 +206,9 @@ fn main() -> Result<()> {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, boxed as isize);
 
         if !RegisterHotKey(hwnd, HOTKEY_ID, mod_keys, hotkey_vk).as_bool() {
-            eprintln!("config: 热键 \"{hotkey_str}\" 注册失败，可能被其他程序占用");
+            let msg = format!("config: 热键 \"{hotkey_str}\" 注册失败，可能被其他程序占用");
+            let w = to_w(&msg);
+            let _ = MessageBoxW(None, PCWSTR(w.as_ptr()), w!("Gua"), MB_ICONWARNING);
         }
         tray::init(hwnd);
         plugin::load_all(hwnd, &plugin_configs);

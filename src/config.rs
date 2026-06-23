@@ -29,7 +29,10 @@ fn split_description(s: &str) -> (&str, Option<&str>) {
 pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            let _ = fs::write("panic.log", format!("config: 读取配置文件失败: {e}\n"));
+            return Vec::new();
+        }
     };
     let content = content.trim_start_matches('\u{FEFF}');
 
@@ -59,6 +62,7 @@ pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
             });
             } else {
             eprintln!("config: 忽略无法解析的行: {line}");
+            let _ = std::fs::write("panic.log", format!("config: 忽略无法解析的行: {line}\n"));
         }
     }
     entries

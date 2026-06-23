@@ -25,7 +25,10 @@ fn url_encode(s: &str) -> String {
 pub fn execute(_key: &str, val: &str, query: &str) {
     // 反引号包裹的命令：去掉首尾 `，用 CreateProcessW 执行（自动解析程序+参数）
     if val.len() >= 2 && val.starts_with('`') && val.ends_with('`') {
-        let cmd = &val[1..val.len() - 1];
+        let cmd = val[1..val.len() - 1].trim();
+        if cmd.is_empty() {
+            return;
+        }
         let mut cmd_line = to_w(cmd);
         unsafe {
             let mut si = STARTUPINFOW::default();

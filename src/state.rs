@@ -57,6 +57,10 @@ pub const GCS_RESULTSTR: u32 = 0x0800;
 
 // ── helpers ─────────────────────────────────────────────────────
 
+/// 提取 DWORD 的高 16 位作为 UINT
+///
+/// # Safety
+/// 纯数值运算，无安全要求
 pub unsafe fn hiword(d: u32) -> u32 { (d >> 16) & 0xFFFF }
 
 pub fn cfg_str(entries: &[config::Entry], key: &str, default: &str) -> String {
@@ -72,12 +76,12 @@ pub fn cfg_usize(entries: &[config::Entry], key: &str, default: usize) -> usize 
     entries.iter().find(|e| e.key == key).and_then(|e| e.value.parse().ok()).unwrap_or(default)
 }
 pub fn cfg_bool(entries: &[config::Entry], key: &str, default: bool) -> bool {
-    entries.iter().find(|e| e.key == key).map(|e| e.value == "true" || e.value == "1").unwrap_or(default)
+    entries.iter().find(|e| e.key == key).map(|e| e.value.eq_ignore_ascii_case("true") || e.value == "1").unwrap_or(default)
 }
 pub fn cfg_color(entries: &[config::Entry], key: &str, default: u32) -> u32 {
     entries.iter()
         .find(|e| e.key == key)
-        .and_then(|e| u32::from_str_radix(&e.value, 16).ok())
+        .and_then(|e| u32::from_str_radix(e.value.trim_start_matches('#'), 16).ok())
         .unwrap_or(default)
 }
 pub fn colorref(rgb: u32) -> COLORREF {
@@ -130,15 +134,27 @@ pub fn entry_type(val: &str) -> &'static str {
     }
 }
 
+/// 为窗口设置圆角裁剪区域
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - 调用后窗口区域可能改变，后续绘制应配合新区域
 pub unsafe fn round_win(h: HWND, w: i32, hh: i32, corner: i32) {
     let rgn = CreateRoundRectRgn(0, 0, w, hh, corner, corner);
     if !rgn.is_invalid() {
-        SetWindowRgn(h, Some(rgn), true);
+        if SetWindowRgn(h, Some(rgn), true) == 0 {
+            let _ = DeleteObject(HGDIOBJ(rgn.0));
+        }
     }
 }
 
 /// 将窗口定位到工作区指定位置
 /// ratio_x, ratio_y: 0.0~1.0，0.0=左上角 0.5=居中 1.0=右下角
+/// 将窗口定位到工作区指定比例位置
+///
+/// # Safety
+/// - `h` 必须是有效的窗口句柄
+/// - 需在窗口创建后才可调用
 pub unsafe fn center_win(h: HWND, w: i32, hh: i32, ratio_x: f32, ratio_y: f32) {
     let mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
     let mut mi = MONITORINFO {
@@ -286,6 +302,11 @@ pub fn cfg_blacklist(entries: &[config::Entry], key: &str) -> Vec<String> {
 }
 
 /// 获取前台窗口的 exe 文件名（小写，不含路径）
+/// 获取前台窗口的 exe 文件名
+///
+/// # Safety
+/// - 需在支持 PROCESS_QUERY_LIMITED_INFORMATION 权限的进程中调用
+/// - 返回值为进程名快照，多线程场景下前台窗口可能已变化
 pub unsafe fn get_foreground_exe() -> Option<String> {
     #[link(name = "kernel32")]
     extern "system" {
@@ -385,6 +406,11 @@ pub struct AppState {
     pub pinyin_overrides: HashMap<char, Vec<String>>,
 }
 
+/// 从字体名和尺寸创建 GDI 字体对象
+///
+/// # Safety
+/// - GDI 必须已初始化
+/// - 返回的 HFONT 在不再使用时应由调用者通过 `DeleteObject` 释放
 pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
     let sz = -((size as i32 * dpi / 96) as i32);
     let pitch = FONT_PITCH(DEFAULT_PITCH.0 | FF_DONTCARE.0);

@@ -15,6 +15,11 @@ use crate::state::*;
 
 // ── GDI+ 辅助 ──
 
+/// 用 GDI+ 绘制圆角矩形填充区域
+///
+/// # Safety
+/// - `hdc` 必须是有效的 HDC
+/// - GDI+ 必须在调用前已初始化
 pub unsafe fn fill_round_rect(hdc: HDC, x: i32, y: i32, w: i32, h: i32, r: i32, argb: u32) {
     let mut g: *mut GpGraphics = std::ptr::null_mut();
     if GdipCreateFromHDC(hdc, &mut g).0 != 0 || g.is_null() { return; }
@@ -43,17 +48,8 @@ pub unsafe fn fill_round_rect(hdc: HDC, x: i32, y: i32, w: i32, h: i32, r: i32, 
     GdipDeleteGraphics(g);
 }
 
-/// 在指定 DC 上画单项的高亮 + 文字（不清背景，用于 VK_UP/DOWN 直接绘制）
-pub unsafe fn draw_item_hl_text(dc: HDC, s: &AppState, list_index: usize, rect: &RECT, selected: bool) {
-    // 高亮圆角
-    let rcr = (s.round_corner / 2).max(1);
-    let color = if selected { s.accent_color } else { s.theme_color };
-    let argb = 0xFF000000 | color;
-    fill_round_rect(dc, rect.left + 2, rect.top + 2,
-        rect.right - rect.left - 4, rect.bottom - rect.top - 4,
-        rcr, argb);
-
-    // 文字
+/// 提取公共文字渲染：格式化条目文本 → 设置字体/颜色 → DrawTextW
+unsafe fn draw_entry_text(dc: HDC, s: &AppState, list_index: usize, rect: &RECT, selected: bool) {
     let old_font = s.hfont.as_ref().map(|f| SelectObject(dc, HGDIOBJ(f.0)));
     if let Some(&idx) = s.filtered_indices.get(list_index) {
         if idx < s.entries.len() {
@@ -76,6 +72,29 @@ pub unsafe fn draw_item_hl_text(dc: HDC, s: &AppState, list_index: usize, rect: 
     }
 }
 
+/// 在指定 DC 上画单项的高亮圆角背景 + 文字（不清背景，用于 VK_UP/DOWN 直接绘制）
+///
+/// # Safety
+/// - `dc` 必须是有效的 HDC
+/// - `s` 必须是有效的 AppState 引用，且 `s.filtered_indices` 中的索引须在 `s.entries` 范围内
+pub unsafe fn draw_item_hl_text(dc: HDC, s: &AppState, list_index: usize, rect: &RECT, selected: bool) {
+    // 高亮圆角
+    let rcr = (s.round_corner / 2).max(1);
+    let color = if selected { s.accent_color } else { s.theme_color };
+    let argb = 0xFF000000 | color;
+    fill_round_rect(dc, rect.left + 2, rect.top + 2,
+        rect.right - rect.left - 4, rect.bottom - rect.top - 4,
+        rcr, argb);
+
+    // 文字
+    draw_entry_text(dc, s, list_index, rect, selected);
+}
+
+/// 在指定 DC 上完整绘制一个筛选列表项（带背景填充，用于 WM_PAINT 全量重绘）
+///
+/// # Safety
+/// - `hdc` 必须是有效的 HDC
+/// - `s` 必须是有效的 AppState 引用, 且索引须在范围内
 pub unsafe fn draw_filtered_item(hdc: HDC, s: &AppState, list_index: usize, rect: &RECT) {
     let is_sel = list_index == s.sel_index;
 
@@ -94,30 +113,16 @@ pub unsafe fn draw_filtered_item(hdc: HDC, s: &AppState, list_index: usize, rect
     }
 
     // 文字
-    let old_font = s.hfont.as_ref().map(|f| SelectObject(hdc, HGDIOBJ(f.0)));
-    if let Some(&idx) = s.filtered_indices.get(list_index) {
-        if idx < s.entries.len() {
-            let e = &s.entries[idx];
-            let tag = e.category.as_deref().unwrap_or_else(|| entry_type(&e.value));
-            let display = e.description.as_deref().unwrap_or(&e.value);
-            let txt = format!("[{}]  {}  →  {}", tag, e.key, display);
-            let mut ws: Vec<u16> = txt.encode_utf16().collect();
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, if is_sel { COLORREF(0xFFFFFF) } else { colorref(s.text_color) });
-            let mut r = RECT {
-                left: rect.left + 8, top: rect.top + 6,
-                right: rect.right - 4, bottom: rect.bottom - 6,
-            };
-            DrawTextW(hdc, &mut ws, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-        }
-    }
-    if let Some(old) = old_font {
-        SelectObject(hdc, old);
-    }
+    draw_entry_text(hdc, s, list_index, rect, is_sel);
 }
 
 // ── 状态栏重绘（VK_UP/DOWN 和 WM_PAINT 共用）──────────────────
 
+/// 重绘状态栏（VK_UP/DOWN 和 WM_PAINT 共用）
+///
+/// # Safety
+/// - `dc` 必须是有效的 HDC
+/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn redraw_status_bar(dc: HDC, s: &mut AppState, ly: i32, vis: usize) {
     let sh = status_bar_h(s.dpi, s.status_font_size);
     let sy = ly + vis as i32 * s.item_h;

@@ -346,6 +346,59 @@ pub unsafe extern "system" fn wndproc(
                     }
                     return LRESULT(0);
                 }
+                0x21 | 0x22 | 0x23 | 0x24 => {
+                    let n = s.filtered_indices.len();
+                    if n == 0 { return LRESULT(0); }
+                    let old_sel = s.sel_index;
+                    let old_offset = s.scroll_offset;
+                    match wp.0 as u32 {
+                        0x24 => { s.sel_index = 0; s.scroll_offset = 0; }
+                        0x23 => {
+                            s.sel_index = n - 1;
+                            if s.sel_index >= s.max_results {
+                                s.scroll_offset = s.sel_index - s.max_results + 1;
+                            }
+                        }
+                        0x21 => {
+                            s.sel_index = s.sel_index.saturating_sub(s.max_results);
+                            if s.sel_index < s.scroll_offset {
+                                s.scroll_offset = s.sel_index;
+                            }
+                        }
+                        _ => {
+                            s.sel_index = (s.sel_index + s.max_results).min(n - 1);
+                            let bottom = s.scroll_offset + s.max_results - 1;
+                            if s.sel_index > bottom && s.scroll_offset + s.max_results < n {
+                                s.scroll_offset = s.sel_index - s.max_results + 1;
+                            }
+                        }
+                    }
+                    if old_sel != s.sel_index {
+                        if s.scroll_offset != old_offset {
+                            let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                            return LRESULT(0);
+                        }
+                        let ly = list_y(&s.input_rect);
+                        let lh = s.item_h;
+                        let vis = n.min(s.max_results);
+                        let dc = GetDC(Some(h));
+                        let old_vis = old_sel as i32 - s.scroll_offset as i32;
+                        if old_vis >= 0 && old_vis < vis as i32 {
+                            let y = ly + old_vis * lh;
+                            let rc = RECT { left: PD, top: y, right: s.width - PD, bottom: y + lh };
+                            draw_filtered_item(dc, s, old_sel, &rc);
+                        }
+                        let new_vis = s.sel_index as i32 - s.scroll_offset as i32;
+                        if new_vis >= 0 && new_vis < vis as i32 {
+                            let y = ly + new_vis * lh;
+                            let rc = RECT { left: PD, top: y, right: s.width - PD, bottom: y + lh };
+                            draw_item_hl_text(dc, s, s.sel_index, &rc, true);
+                        }
+                        redraw_status_bar(dc, s, ly, vis);
+                        let _ = ReleaseDC(Some(h), dc);
+                    }
+                    return LRESULT(0);
+                }
                 _ => {
                     return DefWindowProcW(h, msg, wp, lp);
                 }
