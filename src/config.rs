@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -55,11 +56,27 @@ pub fn load(path: impl AsRef<Path>) -> Vec<Entry> {
                 category: current_category.clone(),
                 description: description.map(|d| d.to_string()),
             });
-        } else {
+            } else {
             eprintln!("config: 忽略无法解析的行: {line}");
         }
     }
     entries
+}
+
+/// 从解析后的配置中提取所有 [plugin.xxx] section 的配置
+/// 返回: { "vd-hotkeys": { "enabled": "true", "switch_left": "Alt+J", ... }, ... }
+pub fn build_plugin_configs(entries: &[Entry]) -> HashMap<String, HashMap<String, String>> {
+    let mut map: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for e in entries {
+        if let Some(cat) = &e.category {
+            if let Some(name) = cat.strip_prefix("plugin.") {
+                map.entry(name.to_string())
+                    .or_default()
+                    .insert(e.key.clone(), e.value.clone());
+            }
+        }
+    }
+    map
 }
 
 

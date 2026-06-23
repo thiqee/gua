@@ -149,7 +149,7 @@ pub unsafe fn center_win(h: HWND, w: i32, hh: i32, ratio_x: f32, ratio_y: f32) {
         let rc = mi.rcWork;
         let x = rc.left + ((rc.right - rc.left - w) as f32 * ratio_x) as i32;
         let y = rc.top + ((rc.bottom - rc.top - hh) as f32 * ratio_y) as i32;
-        SetWindowPos(h, Some(HWND_TOP), x, y, w, hh, SWP_NOZORDER);
+        let _ = SetWindowPos(h, Some(HWND_TOP), x, y, w, hh, SWP_NOZORDER);
     }
 }
 

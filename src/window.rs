@@ -8,6 +8,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config;
 use crate::executor;
+use crate::plugin;
 use crate::state::*;
 
 pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
@@ -20,8 +21,8 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.sel_index = 0;
     s.scroll_offset = 0;
     s.search_query.clear();
-    DestroyCaret();
-    ShowWindow(h, SW_HIDE);
+    let _ = DestroyCaret();
+    let _ = ShowWindow(h, SW_HIDE);
 }
 
 pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
@@ -40,10 +41,10 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
         let sh = status_bar_h(s.dpi, s.status_font_size);
         let nh = win_h(0, s.item_h, s.eh, s.max_results, sh);
         let mut rc = RECT::default();
-        GetWindowRect(h, &mut rc);
+        let _ = GetWindowRect(h, &mut rc);
         let cur_h = rc.bottom - rc.top;
         if cur_h != nh {
-            SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
+            let _ = SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
             round_win(h, s.width, nh, s.round_corner);
         }
         return;
@@ -64,10 +65,10 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
     let sh = status_bar_h(s.dpi, s.status_font_size);
     let nh = win_h(n, s.item_h, s.eh, s.max_results, sh);
     let mut rc = RECT::default();
-    GetWindowRect(h, &mut rc);
+    let _ = GetWindowRect(h, &mut rc);
     let cur_h = rc.bottom - rc.top;
     if cur_h != nh {
-        SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
+        let _ = SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
         round_win(h, s.width, nh, s.round_corner);
     }
 
@@ -162,13 +163,13 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
             if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
                 // 先注销旧的，再注册新的（同一 ID 不能重复注册）
-                UnregisterHotKey(h, HOTKEY_ID);
+                let _ = UnregisterHotKey(h, HOTKEY_ID);
                 if RegisterHotKey(h, HOTKEY_ID, new_mod, new_vk).as_bool() {
                     s.mod_keys = new_mod;
                     s.hotkey_vk = new_vk;
                 } else {
                     eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
-                    RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
+                    let _ = RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
                 }
             }
         } else {
@@ -178,24 +179,26 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         s.blacklist = cfg_blacklist(&raw, "_blacklist");
         // 重载多音字覆写表
         s.pinyin_overrides = cfg_pinyin_overrides(&raw, "_pinyin_overrides");
+        let plugin_configs = config::build_plugin_configs(&raw);
         let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
         s.entries = new_entries;
         s.config_mtime = cur;
+        plugin::notify_reload(&plugin_configs);
         // 应用窗口样式变更
         if s.opacity < 255 {
             let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
             if style & WS_EX_LAYERED.0 as isize == 0 {
-                SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
+                let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
             }
-            SetLayeredWindowAttributes(h, COLORREF(0), s.opacity, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(h, COLORREF(0), s.opacity, LWA_ALPHA);
         } else {
             let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
             if style & WS_EX_LAYERED.0 as isize != 0 {
-                SetWindowLongPtrW(h, GWL_EXSTYLE, style & !(WS_EX_LAYERED.0 as isize));
+                let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, style & !(WS_EX_LAYERED.0 as isize));
             }
         }
         let after = if s.always_on_top { Some(HWND_TOPMOST) } else { Some(HWND_NOTOPMOST) };
-        SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        let _ = SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
     (config_changed, font_name, font_size)
 }
@@ -234,9 +237,9 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
             let sh = status_bar_h(s.dpi, s.status_font_size);
             center_win(h, s.width, win_h(0, s.item_h, s.eh, s.max_results, sh), s.panel_ratio_x, s.panel_ratio_y);
         }
-        ShowWindow(h, SW_SHOW);
-        SetForegroundWindow(h);
-        SetFocus(h);
+        let _ = ShowWindow(h, SW_SHOW);
+        let _ = SetForegroundWindow(h);
+        let _ = SetFocus(h);
         create_input_caret(h, s);
     }
 }
@@ -246,13 +249,13 @@ pub unsafe fn create_input_caret(h: HWND, s: &AppState) {
         let dc = GetDC(Some(h));
         let old = SelectObject(dc, HGDIOBJ(f.0));
         let mut tm = TEXTMETRICW::default();
-        GetTextMetricsW(dc, &mut tm);
-        SelectObject(dc, old);
+        let _ = GetTextMetricsW(dc, &mut tm);
+        let _ = SelectObject(dc, old);
         let _ = ReleaseDC(Some(h), dc);
         let caret_h = tm.tmHeight;
-        CreateCaret(h, Some(HBITMAP(ptr::null_mut())), 2, caret_h as i32);
-        SetCaretPos(s.input_rect.left + 8, s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2);
-        ShowCaret(Some(h));
+        let _ = CreateCaret(h, Some(HBITMAP(ptr::null_mut())), 2, caret_h as i32);
+        let _ = SetCaretPos(s.input_rect.left + 8, s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2);
+        let _ = ShowCaret(Some(h));
     }
 }
 
@@ -262,16 +265,16 @@ pub unsafe fn update_caret(s: &AppState, h: HWND) {
         let dc = GetDC(Some(h));
         let old = SelectObject(dc, HGDIOBJ(f.0));
         let mut tm = TEXTMETRICW::default();
-        GetTextMetricsW(dc, &mut tm);
+        let _ = GetTextMetricsW(dc, &mut tm);
         let caret_h = tm.tmHeight;
         let prefix = &s.input_text[..s.cursor_pos];
         let ws: Vec<u16> = prefix.encode_utf16().collect();
         let mut sz = SIZE::default();
-        GetTextExtentPoint32W(dc, &ws, &mut sz);
+        let _ = GetTextExtentPoint32W(dc, &ws, &mut sz);
         let cx = s.input_rect.left + 8 + sz.cx + 1;
         let cy = s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2;
-        SelectObject(dc, old);
+        let _ = SelectObject(dc, old);
         let _ = ReleaseDC(Some(h), dc);
-        SetCaretPos(cx, cy);
+        let _ = SetCaretPos(cx, cy);
     }
 }

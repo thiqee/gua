@@ -1,6 +1,11 @@
 /target
+**/target
+**/target
 *.log
 TODO.md
 MANUAL.md
 DEVELOPER.md
 config.toml
+
+# pi 配置（含系统提示词、项目工作流规则等）
+.pi/

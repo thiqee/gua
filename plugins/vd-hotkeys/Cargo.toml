@@ -1,0 +1,12 @@
+[package]
+name = "vd-hotkeys"
+version = "0.1.0"
+edition = "2021"
+description = "Gua 插件：自定义 Windows 虚拟桌面切换快捷键"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gua-sdk = { path = "../../sdk/gua-sdk" }
+winvd = "0.0"

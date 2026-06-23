@@ -9,6 +9,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::draw::*;
+use crate::plugin;
 use crate::state::*;
 use crate::tray;
 use crate::window::*;
@@ -82,10 +83,10 @@ pub unsafe extern "system" fn wndproc(
                 let mut sz = SIZE::default();
                 if !s.input_text.is_empty() {
                     let pws: Vec<u16> = s.input_text.encode_utf16().collect();
-                    GetTextExtentPoint32W(mem_dc, &pws, &mut sz);
+                    let _ = GetTextExtentPoint32W(mem_dc, &pws, &mut sz);
                 }
                 let cx = s.input_rect.left + 8 + sz.cx;
-                SetTextColor(mem_dc, colorref(s.text_color & 0xC0C0C0 | 0x404040));
+                let _ = SetTextColor(mem_dc, colorref(s.text_color & 0xC0C0C0 | 0x404040));
                 let comp_display = s.composing.replace("&", "&&");
                 let mut cws: Vec<u16> = comp_display.encode_utf16().collect();
                 cws.push(0);
@@ -95,8 +96,8 @@ pub unsafe extern "system" fn wndproc(
                     right: s.input_rect.right,
                     bottom: s.input_rect.bottom,
                 };
-                DrawTextW(mem_dc, &mut cws, &mut cr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                SetTextColor(mem_dc, colorref(s.text_color));
+                let _ = DrawTextW(mem_dc, &mut cws, &mut cr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                let _ = SetTextColor(mem_dc, colorref(s.text_color));
             }
 
             let start = s.scroll_offset.min(total.saturating_sub(vis));
@@ -112,13 +113,13 @@ pub unsafe extern "system" fn wndproc(
                 redraw_status_bar(mem_dc, s, ly, vis);
             }
 
-            BitBlt(hdc, 0, 0, s.width, win_height, Some(mem_dc), 0, 0, SRCCOPY);
+            let _ = BitBlt(hdc, 0, 0, s.width, win_height, Some(mem_dc), 0, 0, SRCCOPY);
 
-            SelectObject(mem_dc, old_bmp);
+            let _ = SelectObject(mem_dc, old_bmp);
             let _ = DeleteObject(HGDIOBJ(bmp.0));
             let _ = DeleteDC(mem_dc);
 
-            EndPaint(h, &ps);
+            let _ = EndPaint(h, &ps);
             return LRESULT(0);
         }
 
@@ -142,7 +143,7 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_IME_STARTCOMPOSITION => {
-            HideCaret(Some(h));
+            let _ = HideCaret(Some(h));
             let himc = ImmGetContext(h);
             if himc != 0 {
                 let cf = COMPOSITIONFORM {
@@ -150,8 +151,8 @@ pub unsafe extern "system" fn wndproc(
                     ptCurrentPos: POINT { x: s.input_rect.left, y: s.input_rect.bottom },
                     rcArea: RECT::default(),
                 };
-                ImmSetCompositionWindow(himc, &cf);
-                ImmReleaseContext(h, himc);
+                let _ = ImmSetCompositionWindow(himc, &cf);
+                let _ = ImmReleaseContext(h, himc);
             }
             return LRESULT(0);
         }
@@ -164,14 +165,14 @@ pub unsafe extern "system" fn wndproc(
                     ptCurrentPos: POINT { x: s.input_rect.left, y: s.input_rect.bottom },
                     rcArea: RECT::default(),
                 };
-                ImmSetCompositionWindow(himc, &cf);
+                let _ = ImmSetCompositionWindow(himc, &cf);
 
                 if lp.0 as usize & GCS_COMPSTR as usize != 0 {
                     let len = ImmGetCompositionStringW(himc, GCS_COMPSTR, ptr::null_mut(), 0);
                     if len > 0 {
                         let bytes = len as usize;
                         let mut buf = vec![0u16; bytes / 2 + 1];
-                        ImmGetCompositionStringW(himc, GCS_COMPSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
+                        let _ = ImmGetCompositionStringW(himc, GCS_COMPSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
                         let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
                         s.composing = String::from_utf16_lossy(&buf[..end]);
                     } else {
@@ -183,7 +184,7 @@ pub unsafe extern "system" fn wndproc(
                     if len > 0 {
                         let bytes = len as usize;
                         let mut buf = vec![0u16; bytes / 2 + 1];
-                        ImmGetCompositionStringW(himc, GCS_RESULTSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
+                        let _ = ImmGetCompositionStringW(himc, GCS_RESULTSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
                         let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
                         let result = String::from_utf16_lossy(&buf[..end]);
                         s.input_text.insert_str(s.cursor_pos, &result);
@@ -194,21 +195,26 @@ pub unsafe extern "system" fn wndproc(
                         update_caret(s, h);
                     }
                 }
-                ImmReleaseContext(h, himc);
-                RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                let _ = ImmReleaseContext(h, himc);
+                let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             }
             return LRESULT(0);
         }
 
         WM_IME_ENDCOMPOSITION => {
             s.composing.clear();
-            ShowCaret(Some(h));
-            RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+            let _ = ShowCaret(Some(h));
+            let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
         }
 
         WM_HOTKEY => {
-            toggle_win(h, s);
+            let hotkey_id = wp.0 as i32;
+            if plugin::is_plugin_hotkey(hotkey_id) {
+                plugin::dispatch_hotkey(hotkey_id);
+            } else {
+                toggle_win(h, s);
+            }
             return LRESULT(0);
         }
 
@@ -218,7 +224,6 @@ pub unsafe extern "system" fn wndproc(
                     tray::show_menu(h);
                 }
                 0x0201 => {
-                    // 如果面板刚因失焦隐藏（<200ms），本次托盘点击不重新打开
                     if let Some(t) = s.last_hide_time {
                         if t.elapsed() < std::time::Duration::from_millis(200) {
                             s.last_hide_time = None;
@@ -238,7 +243,7 @@ pub unsafe extern "system" fn wndproc(
                 IDM_TOGGLE => { toggle_win(h, s); return LRESULT(0); }
                 IDM_OPEN_CONFIG => {
                     let p = to_w(CONFIG_FILE);
-                    ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
+                    let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
                     return LRESULT(0);
                 }
                 IDM_EXIT => {
@@ -266,7 +271,7 @@ pub unsafe extern "system" fn wndproc(
                         s.filter = s.input_text.clone();
                         fill_list(s, h);
                         update_caret(s, h);
-                        RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                        let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
                     return LRESULT(0);
                 }
@@ -290,7 +295,7 @@ pub unsafe extern "system" fn wndproc(
                         s.input_text.replace_range(s.cursor_pos..next, "");
                         s.filter = s.input_text.clone();
                         fill_list(s, h);
-                        RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                        let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
                     return LRESULT(0);
                 }
@@ -317,7 +322,7 @@ pub unsafe extern "system" fn wndproc(
                     }
                     if old_sel != s.sel_index {
                         if s.scroll_offset != old_offset {
-                            RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                            let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                             return LRESULT(0);
                         }
                         let ly = list_y(&s.input_rect);
@@ -357,13 +362,13 @@ pub unsafe extern "system" fn wndproc(
             s.filter = s.input_text.clone();
             fill_list(s, h);
             update_caret(s, h);
-            RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+            let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
         }
 
         WM_SIZE => {
             let mut rc = RECT::default();
-            GetClientRect(h, &mut rc);
+            let _ = GetClientRect(h, &mut rc);
             let w = rc.right - rc.left;
             let fp = font_px(s.font_size, s.dpi);
             let eh = fp + 24;
@@ -379,13 +384,19 @@ pub unsafe extern "system" fn wndproc(
             s.dpi = dpi;
             rebuild_font(s, dpi);
             let rc = &*(lp.0 as *const RECT);
-            SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top,
+            let _ = SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top,
                 rc.right - rc.left, rc.bottom - rc.top,
                 SWP_NOZORDER | SWP_NOACTIVATE);
             return LRESULT(0);
         }
 
-        _ => {}
+        _ => {
+            if msg != WM_HOTKEY && msg != WM_DESTROY && msg != WM_COMMAND {
+                if plugin::dispatch_wndproc(msg, wp.0 as u64, lp.0 as i64) {
+                    return LRESULT(0);
+                }
+            }
+        }
     }
 
     DefWindowProcW(h, msg, wp, lp)

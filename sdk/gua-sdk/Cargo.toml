@@ -1,0 +1,11 @@
+[package]
+name = "gua-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Gua plugin SDK — 用于开发 Gua 插件的 Rust crate"
+license = "MIT"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]

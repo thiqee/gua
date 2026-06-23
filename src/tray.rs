@@ -1,7 +1,5 @@
 // System tray icon + context menu (Windows-only, uses windows crate)
 
-#![allow(unused_must_use)]
-
 use std::ptr;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -18,6 +16,7 @@ const IDM_OPEN_CONFIG: u16 = super::IDM_OPEN_CONFIG;
 const IDM_EXIT: u16 = super::IDM_EXIT;
 
 static mut TRAY_HWND: HWND = HWND(ptr::null_mut());
+static mut TRAY_HICON: HICON = HICON(ptr::null_mut());
 
 /// 从 .ico 文件字节数据中提取第一个图标条目并创建 HICON
 unsafe fn load_ico_from_bytes(data: &[u8]) -> Option<HICON> {
@@ -60,17 +59,19 @@ pub unsafe fn init(hwnd: HWND) {
             nid.szTip[i] = c;
         }
     }
-    Shell_NotifyIconW(NIM_ADD, &nid);
+    let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+    TRAY_HICON = hicon;
 }
 
 pub unsafe fn destroy() {
+    let _ = DestroyIcon(TRAY_HICON);
     let nid = NOTIFYICONDATAW {
         cbSize: size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: TRAY_HWND,
         uID: TRAY_ID,
         ..Default::default()
     };
-    Shell_NotifyIconW(NIM_DELETE, &nid);
+    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
 pub unsafe fn show_menu(hwnd: HWND) {
@@ -80,17 +81,17 @@ pub unsafe fn show_menu(hwnd: HWND) {
         _ => return,
     };
 
-    AppendMenuW(menu, MF_STRING, IDM_TOGGLE as usize, w!("打开 Gua"));
-    AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("打开配置文件"));
-    AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
-    AppendMenuW(menu, MF_STRING, IDM_EXIT as usize, w!("退出"));
+    let _ = AppendMenuW(menu, MF_STRING, IDM_TOGGLE as usize, w!("打开 Gua"));
+    let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("打开配置文件"));
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
+    let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT as usize, w!("退出"));
 
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
 
-    SetForegroundWindow(hwnd);
+    let _ = SetForegroundWindow(hwnd);
 
-    TrackPopupMenu(
+    let _ = TrackPopupMenu(
         menu,
         TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON,
         pt.x, pt.y,

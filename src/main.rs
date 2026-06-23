@@ -3,11 +3,10 @@
 
 #![cfg(target_os = "windows")]
 #![windows_subsystem = "windows"]
-#![allow(unused_must_use)]
-
 mod config;
 mod draw;
 mod executor;
+mod plugin;
 mod state;
 mod tray;
 mod window;
@@ -43,7 +42,7 @@ fn main() -> Result<()> {
     let mutex = unsafe { CreateMutexW(std::ptr::null(), BOOL(0), PCWSTR(mutex_name.as_ptr())) };
     if mutex.0.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         if !mutex.0.is_null() {
-            unsafe { CloseHandle(mutex); }
+            unsafe { let _ = CloseHandle(mutex); }
         }
         return Ok(());
     }
@@ -115,6 +114,7 @@ fn main() -> Result<()> {
         };
         // 黑名单
         let blacklist = cfg_blacklist(&raw_entries, "_blacklist");
+        let plugin_configs = config::build_plugin_configs(&raw_entries);
         let entries: Vec<config::Entry> = raw_entries.into_iter().filter(|e| !e.key.starts_with('_')).collect();
 
         let inst = GetModuleHandleW(None)?;
@@ -148,7 +148,7 @@ fn main() -> Result<()> {
         if opacity < 255 {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
                 (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED.0 as isize) as isize);
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), opacity, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), opacity, LWA_ALPHA);
         }
 
         let fp = font_px(font_size, dpi);
@@ -206,6 +206,7 @@ fn main() -> Result<()> {
             eprintln!("config: 热键 \"{hotkey_str}\" 注册失败，可能被其他程序占用");
         }
         tray::init(hwnd);
+        plugin::load_all(hwnd, &plugin_configs);
     }
 
     unsafe {
@@ -215,9 +216,13 @@ fn main() -> Result<()> {
             if ret.0 == 0 || ret.0 == -1 {
                 break;
             }
-            TranslateMessage(&msg);
+            let _ = TranslateMessage(&msg);
             DispatchMessageW(&mut msg);
         }
+    }
+
+    unsafe {
+        plugin::unload_all();
     }
 
     unsafe {
