@@ -34,6 +34,7 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.sel_index = 0;
     s.scroll_offset = 0;
     s.search_query.clear();
+    s.composing.clear();
     let _ = DestroyCaret();
     let _ = ShowWindow(h, SW_HIDE);
     // 降优先级后立即换出，保持低优先级让系统持续修剪
