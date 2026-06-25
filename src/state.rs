@@ -22,6 +22,7 @@ pub const PINYIN_SEARCH_DEFAULT: bool = true;
 pub const CONFIG_FILE: &str = "config.toml";
 
 pub const HOTKEY_ID: i32 = 1;
+
 pub const TRAY_MSG: u32 = WM_APP + 256;
 pub const TRAY_ID: u32 = 1;
 pub const IDM_TOGGLE: u16 = 100;
@@ -90,6 +91,15 @@ pub fn colorref(rgb: u32) -> COLORREF {
     let b = rgb & 0xFF;
     COLORREF((b << 16) | (g << 8) | r)
 }
+
+#[repr(C)]
+pub struct MemPrio {
+    pub priority: u32,
+}
+
+pub const PROCESS_MEMORY_PRIORITY: i32 = 0;
+pub const MEM_PRIO_VERY_LOW: u32 = 1;
+pub const MEM_PRIO_NORMAL: u32 = 5;
 
 pub fn to_w(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()

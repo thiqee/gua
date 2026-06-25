@@ -1,10 +1,18 @@
 // Gua — 窗口管理
 
+use std::mem;
 use std::ptr;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn SetProcessWorkingSetSize(h: HANDLE, min: usize, max: usize) -> i32;
+    fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
+}
 
 use crate::config;
 use crate::executor;
@@ -28,6 +36,11 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.search_query.clear();
     let _ = DestroyCaret();
     let _ = ShowWindow(h, SW_HIDE);
+    // 降优先级后立即换出，保持低优先级让系统持续修剪
+    let hp = GetCurrentProcess();
+    let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
+    let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
+    let _ = SetProcessWorkingSetSize(hp, usize::MAX, usize::MAX);
 }
 
 /// 填充筛选列表并调整窗口高度
@@ -235,6 +248,10 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     if s.visible {
         hide_clear(h, s);
     } else {
+        // 恢复 Normal 优先级（为下一次隐藏时的标记做准备）
+        let hp = GetCurrentProcess();
+        let prio = MemPrio { priority: MEM_PRIO_NORMAL };
+        let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
         let (config_changed, font_name, font_size) = reload_config(h, s);
 
         // 字体变化时重建

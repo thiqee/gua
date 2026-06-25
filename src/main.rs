@@ -25,6 +25,7 @@ extern "system" {
         lpName: PCWSTR,
     ) -> HANDLE;
 }
+
 use windows::Win32::Graphics::GdiPlus::{
     GdiplusStartup, GdiplusShutdown, GdiplusStartupInput as GpStartupInput,
 };

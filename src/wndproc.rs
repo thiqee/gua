@@ -1,12 +1,20 @@
 // Gua — 窗口过程（消息处理）
 
+use std::mem;
 use std::ptr;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn SetProcessWorkingSetSize(h: HANDLE, min: usize, max: usize) -> i32;
+    fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
+}
 
 use crate::draw::*;
 use crate::plugin;
@@ -440,6 +448,17 @@ pub unsafe extern "system" fn wndproc(
             let _ = SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top,
                 rc.right - rc.left, rc.bottom - rc.top,
                 SWP_NOZORDER | SWP_NOACTIVATE);
+            return LRESULT(0);
+        }
+
+        WM_POWERBROADCAST => {
+            let evt = wp.0 as u32;
+            if evt == PBT_APMRESUMESUSPEND || evt == PBT_APMRESUMEAUTOMATIC {
+                let hp = GetCurrentProcess();
+                let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
+                let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
+                let _ = SetProcessWorkingSetSize(hp, usize::MAX, usize::MAX);
+            }
             return LRESULT(0);
         }
 
