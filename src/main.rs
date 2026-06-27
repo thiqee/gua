@@ -1,5 +1,5 @@
 // Gua — Windows 桌面搜索启动器
-// 纯 Win32 API，自绘列表，无闪烁
+// DComp + D3D11 + Direct2D 渲染
 
 #![cfg(target_os = "windows")]
 #![windows_subsystem = "windows"]
@@ -17,6 +17,9 @@ use std::ptr;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::LibraryLoader::*;
+use windows::Win32::UI::WindowsAndMessaging::*;
+
 #[link(name = "kernel32")]
 extern "system" {
     fn CreateMutexW(
@@ -26,37 +29,15 @@ extern "system" {
     ) -> HANDLE;
 }
 
-use windows::Win32::Graphics::GdiPlus::{
-    GdiplusStartup, GdiplusShutdown, GdiplusStartupInput as GpStartupInput,
-};
-
-use windows::Win32::System::LibraryLoader::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
-
 use crate::state::*;
-
-
+use crate::window::*;
 
 fn main() -> Result<()> {
-    // 单例检查：确保只有一个实例在运行
     let mutex_name = to_w("Local\\Gua-Singleton-Mutex");
     let mutex = unsafe { CreateMutexW(std::ptr::null(), BOOL(0), PCWSTR(mutex_name.as_ptr())) };
     if mutex.0.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        if !mutex.0.is_null() {
-            unsafe { let _ = CloseHandle(mutex); }
-        }
+        if !mutex.0.is_null() { unsafe { let _ = CloseHandle(mutex); } }
         return Ok(());
-    }
-
-    let mut gdiplus_token: usize = 0;
-    unsafe {
-        let input = GpStartupInput {
-            GdiplusVersion: 1,
-            DebugEventCallback: 0,
-            SuppressBackgroundThread: false.into(),
-            SuppressExternalCodecs: false.into(),
-        };
-        GdiplusStartup(&mut gdiplus_token, &input, std::ptr::null_mut());
     }
 
     std::panic::set_hook(Box::new(|info| {
@@ -66,22 +47,15 @@ fn main() -> Result<()> {
 
     unsafe {
         let _ = SetProcessDPIAware();
-
         let screen_dc = GetDC(None);
         let dpi = GetDeviceCaps(Some(screen_dc), LOGPIXELSY);
         let _ = ReleaseDC(None, screen_dc);
 
-        // Config
         let raw_entries = config::load(CONFIG_FILE);
-        // 检查 _font 是否在配置中显式指定
         let has_explicit_font = raw_entries.iter().any(|e| e.key == "_font");
-        // 始终加载私有字体（注册到进程），没有显式配置时才自动检测家族名
         let private_font_name = load_private_fonts();
         let font_name = if !has_explicit_font {
-            match private_font_name {
-                Some(ref name) => name.clone(),
-                None => cfg_str(&raw_entries, "_font", "Segoe UI"),
-            }
+            private_font_name.unwrap_or_else(|| cfg_str(&raw_entries, "_font", "Segoe UI"))
         } else {
             cfg_str(&raw_entries, "_font", "Segoe UI")
         };
@@ -101,10 +75,8 @@ fn main() -> Result<()> {
         let accent_color = cfg_color(&raw_entries, "_accent_color", 0x4A6FA5);
         let text_color = cfg_color(&raw_entries, "_text_color", 0xCCCCCC);
         let status_font_size = cfg_f32(&raw_entries, "_status_font_size", 12.0);
-        // 面板位置：0~100（0=左上 50=居中 100=右下），转为 0.0~1.0 比例
         let panel_ratio_x = cfg_f32(&raw_entries, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
         let panel_ratio_y = cfg_f32(&raw_entries, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
-        // 热键
         let hotkey_str = cfg_str(&raw_entries, "_hotkey", "Alt+Space");
         let (mod_keys, hotkey_vk) = match parse_hotkey(&hotkey_str) {
             Some(v) => v,
@@ -114,13 +86,11 @@ fn main() -> Result<()> {
                 (MOD_ALT, VK_SPACE)
             }
         };
-        // 黑名单
         let blacklist = cfg_blacklist(&raw_entries, "_blacklist");
         let plugin_configs = config::build_plugin_configs(&raw_entries);
         let entries: Vec<config::Entry> = raw_entries.into_iter().filter(|e| !e.key.starts_with('_')).collect();
 
         let inst = GetModuleHandleW(None)?;
-
         let cn = to_w("Gua");
         let wc = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
@@ -131,35 +101,20 @@ fn main() -> Result<()> {
             lpszClassName: PCWSTR(cn.as_ptr()),
             ..Default::default()
         };
-        if RegisterClassW(&wc) == 0 {
-            return Err(windows::core::Error::from(HRESULT(-2147467259)));
-        }
+        if RegisterClassW(&wc) == 0 { return Err(windows::core::Error::from(HRESULT(-2147467259))); }
 
         let cn2 = to_w("Gua");
-        let ex_style = WS_EX_TOOLWINDOW
+        let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP
             | if always_on_top { WS_EX_TOPMOST } else { WINDOW_EX_STYLE::default() };
         let hwnd = CreateWindowExW(
             ex_style,
             PCWSTR(cn2.as_ptr()),
             w!("Gua"),
             WS_POPUP,
-            0, 0, width, 1,
-            None,
-            None,
-            Some(inst.into()),
-            None,
+            0, 0, width, 1, None, None, Some(inst.into()), None,
         )?;
-        if opacity < 255 {
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
-                (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED.0 as isize) as isize);
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), opacity, LWA_ALPHA);
-        }
 
         let fp = font_px(font_size, dpi);
-        let hfont = make_font_with(dpi, &font_name, font_size).ok();
-
-        // 首次启动时设为 None，触发首次弹出时读取配置并定位
-        let config_mtime = None;
         let state = AppState {
             entries,
             filter: String::new(),
@@ -171,8 +126,8 @@ fn main() -> Result<()> {
             scroll_offset: 0,
             input_rect: RECT { left: PD, top: PD, right: width - PD, bottom: PD + fp + 24 },
             visible: false,
-            hfont,
-            status_hfont: None,
+            text_format: None,
+            status_text_format: None,
             status_font_size,
             font_name,
             font_size,
@@ -192,8 +147,15 @@ fn main() -> Result<()> {
             input_bg_color,
             accent_color,
             text_color,
+            theme_brush: None,
+            input_bg_brush: None,
+            accent_brush: None,
+            text_brush: None,
+            white_brush: None,
+            renderer: ptr::null_mut(),
+            device_recover_attempts: 0,
             composing: String::new(),
-            config_mtime,
+            config_mtime: None,
             panel_ratio_x,
             panel_ratio_y,
             mod_keys,
@@ -206,36 +168,53 @@ fn main() -> Result<()> {
         let boxed = Box::into_raw(Box::new(state));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, boxed as isize);
 
+        // 创建渲染器
+        let s = &mut *boxed;
+        match create_renderer(hwnd, s) {
+            Ok(r) => {
+                s.renderer = Box::into_raw(Box::new(r));
+                rebuild_text_format(s);
+                create_and_cache_brushes(s);
+            }
+            Err(e) => {
+                let msg = format!("renderer: 创建 D2D 渲染器失败!\n{e:?}");
+                let w = to_w(&msg);
+                let _ = MessageBoxW(None, PCWSTR(w.as_ptr()), w!("Gua"), MB_ICONERROR);
+                let _ = CloseHandle(mutex);
+                return Err(e);
+            }
+        }
+
+        // 注册热键
         if !RegisterHotKey(hwnd, HOTKEY_ID, mod_keys, hotkey_vk).as_bool() {
             let msg = format!("config: 热键 \"{hotkey_str}\" 注册失败，可能被其他程序占用");
             let w = to_w(&msg);
             let _ = MessageBoxW(None, PCWSTR(w.as_ptr()), w!("Gua"), MB_ICONWARNING);
         }
+
         tray::init(hwnd);
         plugin::load_all(hwnd, &plugin_configs);
 
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
-            if ret.0 == 0 || ret.0 == -1 {
-                break;
-            }
+            if ret.0 == 0 || ret.0 == -1 { break; }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&mut msg);
         }
 
         plugin::unload_all();
-        // 回收 AppState（对应 Box::into_raw）
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         if ptr != 0 {
+            let s = &mut *(ptr as *mut AppState);
+            if !s.renderer.is_null() {
+                let _ = Box::from_raw(s.renderer);
+                s.renderer = ptr::null_mut();
+            }
             drop(Box::from_raw(ptr as *mut AppState));
         }
-    }
 
-    unsafe {
         let _ = CloseHandle(mutex);
-        GdiplusShutdown(gdiplus_token);
     }
     Ok(())
 }
-

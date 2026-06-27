@@ -3,10 +3,20 @@
 use std::mem;
 use std::ptr;
 
+use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::Common::*;
+use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::Direct3D::*;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::DirectComposition::*;
+use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Com::*;
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -19,11 +29,202 @@ use crate::executor;
 use crate::plugin;
 use crate::state::*;
 
+/// 创建 D2D 渲染器（Composition SwapChain + DComp，透明圆角均正常工作）
+pub unsafe fn create_renderer(hwnd: HWND, s: &AppState) -> Result<GuaRenderer> {
+    let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    if hr.0 != 0 && hr.0 != 1 {
+        return Err(Error::from(hr));
+    }
+    let com_initialized = hr.0 == 0;
+
+    let mut device: Option<ID3D11Device> = None;
+    let mut ctx: Option<ID3D11DeviceContext> = None;
+    D3D11CreateDevice(
+        None as Option<&IDXGIAdapter>,
+        D3D_DRIVER_TYPE_HARDWARE,
+        HMODULE::default(),
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        None,
+        D3D11_SDK_VERSION,
+        Some(&mut device),
+        None,
+        Some(&mut ctx),
+    )?;
+    let device = device.unwrap();
+    let ctx = ctx.unwrap();
+
+    let dxgi_device: IDXGIDevice = device.cast()?;
+    let adapter = dxgi_device.GetAdapter()?;
+    let dxgi_factory: IDXGIFactory2 = adapter.GetParent()?;
+
+    let supports_tearing = {
+        let mut feature = DXGI_FEATURE::default();
+        let factory5: IDXGIFactory5 = dxgi_factory.cast()?;
+        factory5.CheckFeatureSupport(
+            DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+            &mut feature as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<DXGI_FEATURE>() as u32,
+        ).is_ok() && feature.0 != 0
+    };
+
+    // Composition 交换链（透明通道 + 抗锯齿圆角均支持）
+    let swap_desc = DXGI_SWAP_CHAIN_DESC1 {
+        Width: s.width.max(1) as u32,
+        Height: 1u32,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Stereo: false.into(),
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        BufferCount: 2,
+        Scaling: DXGI_SCALING_STRETCH,
+        SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+        Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32,
+    };
+    let swap_chain = dxgi_factory.CreateSwapChainForComposition(&device, &swap_desc, None)?;
+
+    let d2d_factory: ID2D1Factory1 = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+    let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
+    let d2d_context = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+
+    let back_buffer: IDXGISurface = swap_chain.GetBuffer(0)?;
+    let props = D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        colorContext: std::mem::ManuallyDrop::new(None),
+    };
+    let target = d2d_context.CreateBitmapFromDxgiSurface(&back_buffer, Some(&props))?;
+    d2d_context.SetTarget(&target);
+
+    let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+
+    // DComp：承载交换链 + 圆角裁剪（需持有 IDCompositionTarget 防止释放）
+    let dcomp_device: Option<IDCompositionDevice> = DCompositionCreateDevice::<_, IDCompositionDevice>(&dxgi_device).ok();
+    let mut dcomp_visual: Option<IDCompositionVisual> = None;
+    let mut dcomp_target: Option<IDCompositionTarget> = None;
+    if let Some(ref dcomp) = dcomp_device {
+        if let Some(v) = dcomp.CreateVisual().ok() {
+            let _ = v.SetContent(&swap_chain);
+            if let Ok(t) = dcomp.CreateTargetForHwnd(hwnd, true) {
+                let _ = t.SetRoot(&v);
+                dcomp_target = Some(t);
+            }
+            let _ = dcomp.Commit();
+            dcomp_visual = Some(v);
+        }
+    }
+
+    Ok(GuaRenderer {
+        d3d_device: device,
+        d3d_context: ctx,
+        dxgi_factory,
+        swap_chain,
+        supports_tearing,
+        d2d_factory,
+        d2d_device,
+        d2d_context,
+        dwrite_factory,
+        target: Some(target),
+        dcomp_device,
+        dcomp_visual,
+        dcomp_target,
+        com_initialized,
+    })
+}
+
+/// 重建设备丢失后的渲染器
+pub unsafe fn recreate_renderer(s: &mut AppState, h: HWND) {
+    s.theme_brush = None;
+    s.input_bg_brush = None;
+    s.accent_brush = None;
+    s.text_brush = None;
+    s.white_brush = None;
+    s.text_format = None;
+    s.status_text_format = None;
+
+    if !s.renderer.is_null() {
+        let r = Box::from_raw(s.renderer);
+        drop(r);
+    }
+    s.renderer = ptr::null_mut();
+
+    match create_renderer(h, s) {
+        Ok(r) => {
+            s.renderer = Box::into_raw(Box::new(r));
+            create_and_cache_brushes(s);
+            rebuild_text_format(s);
+        }
+        Err(_) => {
+            s.renderer = ptr::null_mut();
+        }
+    }
+}
+
+/// 创建或更新画刷缓存
+pub unsafe fn create_and_cache_brushes(s: &mut AppState) {
+    let d2d = match gua_renderer(s) { Some(r) => &r.d2d_context as *const ID2D1DeviceContext, None => return };
+    let theme = s.theme_color; let input = s.input_bg_color; let accent = s.accent_color; let text = s.text_color; let op = s.opacity;
+    s.theme_brush = create_brush(d2d, theme, op as f32 / 255.0);
+    s.input_bg_brush = create_brush(d2d, input, 1.0);
+    s.accent_brush = create_brush(d2d, accent, 1.0);
+    s.text_brush = create_brush(d2d, text, 1.0);
+    let white = D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+    s.white_brush = unsafe { (*d2d).CreateSolidColorBrush(&white as *const _, None).ok() };
+}
+
+unsafe fn create_brush(d2d: *const ID2D1DeviceContext, rgb: u32, alpha: f32) -> Option<ID2D1SolidColorBrush> {
+    let color = color_to_d2d(rgb, alpha);
+    (*d2d).CreateSolidColorBrush(&color as *const _, None).ok()
+}
+
+/// 重建 DWrite TextFormat
+pub unsafe fn rebuild_text_format(s: &mut AppState) {
+    s.text_format = None;
+    s.status_text_format = None;
+    let factory = match gua_renderer(s) { Some(r) => &r.dwrite_factory as *const IDWriteFactory, None => return };
+    let family = to_w(&s.font_name);
+    let locale = to_w("en-us");
+    let font_size = s.font_size;
+    let status_font_size = s.status_font_size;
+    s.text_format = make_text_format(factory, &family, &locale, font_size);
+    s.status_text_format = make_text_format(factory, &family, &locale, status_font_size);
+}
+
+unsafe fn make_text_format(factory: *const IDWriteFactory, family: &[u16], locale: &[u16], sz: f32) -> Option<IDWriteTextFormat> {
+    let tf = (*factory).CreateTextFormat(
+        PCWSTR(family.as_ptr()),
+        None as Option<&IDWriteFontCollection>,
+        DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL,
+        sz,
+        PCWSTR(locale.as_ptr()),
+    ).ok()?;
+    let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    Some(tf)
+}
+
+/// 测量文本宽度（像素）
+pub unsafe fn measure_text_width(s: &AppState, text: &str) -> f32 {
+    let r = match gua_renderer(s) { Some(r) => r, None => return 0.0 };
+    let tf = match s.text_format { Some(ref tf) => tf, None => return 0.0 };
+    let ws: Vec<u16> = text.encode_utf16().collect();
+    if ws.is_empty() { return 0.0; }
+    if let Ok(layout) = r.dwrite_factory.CreateTextLayout(&ws, tf, 10000.0, 10000.0) {
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        if layout.GetMetrics(&mut metrics).is_ok() {
+            return metrics.widthIncludingTrailingWhitespace;
+        }
+    }
+    0.0
+}
+
 /// 隐藏窗口并清空状态
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.last_hide_time = Some(std::time::Instant::now());
     s.visible = false;
@@ -37,7 +238,6 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.composing.clear();
     let _ = DestroyCaret();
     let _ = ShowWindow(h, SW_HIDE);
-    // 降优先级后立即换出，保持低优先级让系统持续修剪
     let hp = GetCurrentProcess();
     let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
     let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
@@ -45,12 +245,7 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
 }
 
 /// 填充筛选列表并调整窗口高度
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - `s` 必须是可变的 AppState 引用，且 `s.entries` 等字段须正确初始化
 pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
-    // 按第一个空格拆成 key 和搜索词
     let (key_part, query_part) = if let Some(pos) = s.filter.find(' ') {
         let (k, _) = s.filter.split_at(pos);
         (k.to_string(), s.filter[pos + 1..].to_string())
@@ -58,7 +253,6 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
         (s.filter.clone(), String::new())
     };
     s.search_query = query_part;
-
     s.filtered_indices.clear();
 
     if !key_part.is_empty() {
@@ -80,7 +274,6 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
     let cur_h = rc.bottom - rc.top;
     if cur_h != nh {
         let _ = SetWindowPos(h, Some(HWND_TOP), rc.left, rc.top, s.width, nh, SWP_NOZORDER);
-        round_win(h, s.width, nh, s.round_corner);
     }
 
     s.sel_index = 0;
@@ -88,15 +281,9 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
 }
 
 /// 执行当前选中项
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - `s` 必须是可变的 AppState 引用
 pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
-    // 有搜索词时（输入包含空格），用精确匹配的识别码执行搜索，忽略列表选中项
     let idx = if !s.search_query.is_empty() {
         let key_part = s.filter.split(' ').next().unwrap_or("");
-        // 同名识别码中优先选搜索引擎 URL（http/https 开头且以 = 结尾的 URL 模板）
         s.entries.iter().enumerate()
             .filter(|(_, e)| e.key == key_part)
             .max_by_key(|(_, e)| {
@@ -107,7 +294,6 @@ pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
     } else {
         None
     };
-    // 没有搜索词时走正常的选中项
     let idx = idx.or_else(|| {
         if s.sel_index < s.filtered_indices.len() {
             Some(s.filtered_indices[s.sel_index])
@@ -123,29 +309,15 @@ pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
     }
 }
 
-/// 重建字体对象
-///
-/// # Safety
-/// - `s` 必须是可变的 AppState 引用
-/// - 旧字体对象会被释放，调用后旧指针不应继续使用
+/// 重建 DWrite TextFormat（响应 DPI 变化）
 pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
-    if let Some(old) = s.hfont.take() {
-        let _ = DeleteObject(HGDIOBJ(old.0));
-    }
     let fp = font_px(s.font_size, dpi);
     s.eh = fp + 24;
     s.item_h = fp + 20;
-    if let Ok(f) = make_font_with(dpi, &s.font_name, s.font_size) {
-        s.hfont = Some(f);
-    }
+    rebuild_text_format(s);
 }
 
-/// 重载配置文件，返回 (配置是否变更, 更新后的字体名, 更新后的字号)
-/// 热重载配置（检查 mtime）
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - `s` 必须是可变的 AppState 引用
+/// 热重载配置
 pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
     let cur = std::fs::metadata(CONFIG_FILE)
         .ok()
@@ -156,8 +328,7 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
     if config_changed {
         let raw = config::load(CONFIG_FILE);
         let has_explicit_font = raw.iter().any(|e| e.key == "_font");
-        // 热重载时重新注册 fonts/ 里的字体
-        let private_font_name = crate::state::load_private_fonts();
+        let private_font_name = load_private_fonts();
         font_name = if has_explicit_font {
             cfg_str(&raw, "_font", &s.font_name)
         } else {
@@ -168,27 +339,54 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         s.width = cfg_i32(&raw, "_width", s.width);
         s.round_corner = cfg_i32(&raw, "_round_corner", s.round_corner);
         s.hide_on_focus_loss = cfg_bool(&raw, "_hide_on_focus_loss", s.hide_on_focus_loss);
+        let old_theme = s.theme_color;
+        let old_input_bg = s.input_bg_color;
+        let old_accent = s.accent_color;
+        let old_text = s.text_color;
+        let old_opacity = s.opacity;
         s.theme_color = cfg_color(&raw, "_theme_color", s.theme_color);
         s.input_bg_color = cfg_color(&raw, "_input_bg_color", s.input_bg_color);
         s.accent_color = cfg_color(&raw, "_accent_color", s.accent_color);
         s.text_color = cfg_color(&raw, "_text_color", s.text_color);
         s.status_font_size = cfg_f32(&raw, "_status_font_size", s.status_font_size);
-        if let Some(old) = s.status_hfont.take() {
-            let _ = DeleteObject(HGDIOBJ(old.0));
-        }
         s.always_on_top = cfg_bool(&raw, "_always_on_top", s.always_on_top);
         s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
         s.case_sensitive = cfg_bool(&raw, "_case_sensitive", s.case_sensitive);
         s.fuzzy_enabled = cfg_bool(&raw, "_fuzzy_match", s.fuzzy_enabled);
         s.pinyin_enabled = cfg_bool(&raw, "_pinyin_search", s.pinyin_enabled);
-        // 面板位置：0~100 转为 0.0~1.0 比例
         s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
         s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
-        // 热键变更时重新注册（在 into_iter 之前，raw 尚未被消费）
+
+        // 更新画刷颜色（SetColor 不重建）
+        if old_theme != s.theme_color || old_opacity != s.opacity {
+            if let Some(ref brush) = s.theme_brush {
+                let c = color_to_d2d(s.theme_color, s.opacity as f32 / 255.0);
+                brush.SetColor(&c as *const _);
+            }
+        }
+        if old_input_bg != s.input_bg_color {
+            if let Some(ref brush) = s.input_bg_brush {
+                let c = color_to_d2d(s.input_bg_color, 1.0);
+                brush.SetColor(&c as *const _);
+            }
+        }
+        if old_accent != s.accent_color {
+            if let Some(ref brush) = s.accent_brush {
+                let c = color_to_d2d(s.accent_color, 1.0);
+                brush.SetColor(&c as *const _);
+            }
+        }
+        if old_text != s.text_color {
+            if let Some(ref brush) = s.text_brush {
+                let c = color_to_d2d(s.text_color, 1.0);
+                brush.SetColor(&c as *const _);
+            }
+        }
+
+        // 热键变更
         let new_hotkey_str = cfg_str(&raw, "_hotkey", "Alt+Space");
         if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
             if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
-                // 先注销旧的，再注册新的（同一 ID 不能重复注册）
                 let _ = UnregisterHotKey(h, HOTKEY_ID);
                 if RegisterHotKey(h, HOTKEY_ID, new_mod, new_vk).as_bool() {
                     s.mod_keys = new_mod;
@@ -203,41 +401,24 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
             eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
             let _ = std::fs::write("panic.log", format!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键\n"));
         }
-        // 重载黑名单
+
         s.blacklist = cfg_blacklist(&raw, "_blacklist");
-        // 重载多音字覆写表
         s.pinyin_overrides = cfg_pinyin_overrides(&raw, "_pinyin_overrides");
         let plugin_configs = config::build_plugin_configs(&raw);
         let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
         s.entries = new_entries;
         s.config_mtime = cur;
         plugin::notify_reload(&plugin_configs);
-        // 应用窗口样式变更
-        if s.opacity < 255 {
-            let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
-            if style & WS_EX_LAYERED.0 as isize == 0 {
-                let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
-            }
-            let _ = SetLayeredWindowAttributes(h, COLORREF(0), s.opacity, LWA_ALPHA);
-        } else {
-            let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
-            if style & WS_EX_LAYERED.0 as isize != 0 {
-                let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, style & !(WS_EX_LAYERED.0 as isize));
-            }
-        }
+
+        // 置顶样式变更
         let after = if s.always_on_top { Some(HWND_TOPMOST) } else { Some(HWND_NOTOPMOST) };
         let _ = SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
     (config_changed, font_name, font_size)
 }
 
-/// 切换窗口可见状态（显示/隐藏）
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - `s` 必须是可变的 AppState 引用
+/// 切换窗口可见状态
 pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
-    // 黑名单检查：当前台窗口在黑名单中时，热键不响应
     if !s.blacklist.is_empty() {
         if let Some(exe) = get_foreground_exe() {
             if s.blacklist.iter().any(|b| b.eq_ignore_ascii_case(&exe)) {
@@ -249,18 +430,18 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     if s.visible {
         hide_clear(h, s);
     } else {
-        // 恢复 Normal 优先级（为下一次隐藏时的标记做准备）
         let hp = GetCurrentProcess();
         let prio = MemPrio { priority: MEM_PRIO_NORMAL };
         let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
+
         let (config_changed, font_name, font_size) = reload_config(h, s);
 
-        // 字体变化时重建
         if s.font_name != font_name || (s.font_size - font_size).abs() > 0.5 {
             s.font_name = font_name;
             s.font_size = font_size;
             rebuild_font(s, s.dpi);
         }
+
         s.visible = true;
         s.filter.clear();
         s.input_text.clear();
@@ -269,66 +450,43 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         s.sel_index = 0;
         s.scroll_offset = 0;
         fill_list(s, h);
-        // 首次启动或配置变更后重新定位，否则复用上次位置
+
         if config_changed || s.config_mtime.is_none() {
             let sh = status_bar_h(s.dpi, s.status_font_size);
             center_win(h, s.width, win_h(0, s.item_h, s.eh, s.max_results, sh), s.panel_ratio_x, s.panel_ratio_y);
         }
+
         let _ = ShowWindow(h, SW_SHOW);
         let _ = SetForegroundWindow(h);
-        // UIPI 降权：如果 SetForegroundWindow 失败（全屏游戏等），
-        // 尝试 SetWindowPos + HWND_TOP 作为替代方案
         if GetForegroundWindow() != h {
             let _ = SetWindowPos(h, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             let _ = SetForegroundWindow(h);
         }
         let _ = SetFocus(h);
         create_input_caret(h, s);
+        // 强制立即重绘
+        let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
     }
 }
 
-/// 创建输入光标
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - `s` 必须是有效的 AppState 引用
+/// 创建输入光标（仍用 GDI caret，但用 DWrite 度量文本）
 pub unsafe fn create_input_caret(h: HWND, s: &AppState) {
-    if let Some(ref f) = s.hfont {
-        let dc = GetDC(Some(h));
-        let old = SelectObject(dc, HGDIOBJ(f.0));
-        let mut tm = TEXTMETRICW::default();
-        let _ = GetTextMetricsW(dc, &mut tm);
-        let _ = SelectObject(dc, old);
-        let _ = ReleaseDC(Some(h), dc);
-        let caret_h = tm.tmHeight;
-        let _ = CreateCaret(h, Some(HBITMAP(ptr::null_mut())), 2, caret_h as i32);
-        let _ = SetCaretPos(s.input_rect.left + 8, s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2);
-        let _ = ShowCaret(Some(h));
-    }
+    let caret_h = font_px(s.font_size, s.dpi);
+    let _ = CreateCaret(h, Some(HBITMAP(ptr::null_mut())), 2, caret_h as i32);
+    let cx = s.input_rect.left + 8;
+    let cy = s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2;
+    let _ = SetCaretPos(cx, cy);
+    let _ = ShowCaret(Some(h));
 }
 
 /// 更新光标位置至当前输入位置
-///
-/// # Safety
-/// - `s` 必须是有效的 AppState 引用
-/// - `h` 必须是有效的窗口句柄，且输入光标须已通过 `create_input_caret` 创建
-pub unsafe fn update_caret(s: &AppState, h: HWND) {
+pub unsafe fn update_caret(s: &AppState, _h: HWND) {
     if !s.visible { return; }
-    if let Some(ref f) = s.hfont {
-        let dc = GetDC(Some(h));
-        let old = SelectObject(dc, HGDIOBJ(f.0));
-        let mut tm = TEXTMETRICW::default();
-        let _ = GetTextMetricsW(dc, &mut tm);
-        let caret_h = tm.tmHeight;
-        let prefix = &s.input_text[..s.cursor_pos];
-        let display = prefix.replace("&", "&&");
-        let ws: Vec<u16> = display.encode_utf16().collect();
-        let mut sz = SIZE::default();
-        let _ = GetTextExtentPoint32W(dc, &ws, &mut sz);
-        let cx = s.input_rect.left + 8 + sz.cx + 1;
-        let cy = s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2;
-        let _ = SelectObject(dc, old);
-        let _ = ReleaseDC(Some(h), dc);
-        let _ = SetCaretPos(cx, cy);
-    }
+    let caret_h = font_px(s.font_size, s.dpi);
+    let prefix = &s.input_text[..s.cursor_pos];
+    let display = prefix.replace("&", "&&");
+    let w = measure_text_width(s, &display);
+    let cx = s.input_rect.left + 8 + w as i32 + 1;
+    let cy = s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2;
+    let _ = SetCaretPos(cx, cy);
 }
