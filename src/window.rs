@@ -348,6 +348,7 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         s.input_bg_color = cfg_color(&raw, "_input_bg_color", s.input_bg_color);
         s.accent_color = cfg_color(&raw, "_accent_color", s.accent_color);
         s.text_color = cfg_color(&raw, "_text_color", s.text_color);
+        let old_status_font_size = s.status_font_size;
         s.status_font_size = cfg_f32(&raw, "_status_font_size", s.status_font_size);
         s.always_on_top = cfg_bool(&raw, "_always_on_top", s.always_on_top);
         s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
@@ -381,6 +382,11 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
                 let c = color_to_d2d(s.text_color, 1.0);
                 brush.SetColor(&c as *const _);
             }
+        }
+
+        // 状态栏字号变更时重建 TextFormat
+        if (old_status_font_size - s.status_font_size).abs() > 0.1 {
+            rebuild_text_format(s);
         }
 
         // 热键变更

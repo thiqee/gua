@@ -611,13 +611,31 @@ fn pinyin_substring_match(inp: &str, key: &str, overrides: &HashMap<char, Vec<St
     false
 }
 
+/// 拼音首字母匹配：输入逐个字符匹配每个中文字拼音的首字母
+/// 如 input="fq" → key="番茄小说"：f→番(fan), q→茄(qie)
+fn pinyin_first_letter_match(inp: &str, key: &str, overrides: &HashMap<char, Vec<String>>) -> bool {
+    let mut inp_chars = inp.chars();
+    for c in key.chars() {
+        let Some(inp_c) = inp_chars.next() else {
+            return true;
+        };
+        let readings = get_readings(c, overrides);
+        let matched = readings.iter().any(|r| r.chars().next() == Some(inp_c));
+        if !matched {
+            return false;
+        }
+    }
+    inp_chars.next().is_none()
+}
+
 /// 返回匹配层级：
 ///   Some(1) = 精确匹配（key）
 ///   Some(2) = 前缀匹配（key）
 ///   Some(3) = 子串匹配（key）
 ///   Some(4) = 拼音前缀（输入为 ASCII 且 ≥ 2 字符）
 ///   Some(5) = 拼音子串
-///   Some(6) = 模糊匹配（key，输入至少 2 字符）
+///   Some(6) = 拼音首字母（输入为 ASCII 且 ≥ 2 字符）
+///   Some(7) = 模糊匹配（key，输入至少 2 字符）
 ///   None    = 不匹配
 /// 参数 fuzzy_enabled/pinyin_enabled 控制对应分支是否跳过。
 pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: bool, pinyin_enabled: bool, overrides: &HashMap<char, Vec<String>>) -> Option<u8> {
@@ -651,11 +669,15 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: 
         if key_has_chinese && pinyin_substring_match(&lower_input, &k, overrides) {
             return Some(5);
         }
+        // 6：拼音首字母（fq → 番茄）
+        if key_has_chinese && pinyin_first_letter_match(&lower_input, &k, overrides) {
+            return Some(6);
+        }
     }
 
-    // 6：模糊匹配
+    // 7：模糊匹配
     if fuzzy_enabled && input.chars().count() >= 2 && fuzzy_match(&inp, &k) {
-        return Some(6);
+        return Some(7);
     }
     None
 }
