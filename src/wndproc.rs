@@ -267,7 +267,6 @@ pub unsafe extern "system" fn wndproc(
                         s.filter = s.input_text.clone();
                         s.composing.clear();
                         fill_list(s, h);
-                        update_caret(s, h);
                     }
                 }
                 let _ = ImmReleaseContext(h, himc);
@@ -342,7 +341,6 @@ pub unsafe extern "system" fn wndproc(
                         s.cursor_pos = prev;
                         s.filter = s.input_text.clone();
                         fill_list(s, h);
-                        update_caret(s, h);
                         let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
                     return LRESULT(0);
@@ -350,14 +348,12 @@ pub unsafe extern "system" fn wndproc(
                 0x25 => {
                     if s.cursor_pos > 0 {
                         s.cursor_pos = s.input_text.floor_char_boundary(s.cursor_pos - 1);
-                        update_caret(s, h);
                     }
                     return LRESULT(0);
                 }
                 0x27 => {
                     if s.cursor_pos < s.input_text.len() {
                         s.cursor_pos = s.input_text.ceil_char_boundary(s.cursor_pos + 1);
-                        update_caret(s, h);
                     }
                     return LRESULT(0);
                 }
@@ -434,7 +430,6 @@ pub unsafe extern "system" fn wndproc(
             s.cursor_pos += ch.len_utf8();
             s.filter = s.input_text.clone();
             fill_list(s, h);
-            update_caret(s, h);
             let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
         }

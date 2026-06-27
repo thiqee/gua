@@ -170,7 +170,7 @@ pub unsafe fn create_and_cache_brushes(s: &mut AppState) {
     let d2d = match gua_renderer(s) { Some(r) => &r.d2d_context as *const ID2D1DeviceContext, None => return };
     let theme = s.theme_color; let input = s.input_bg_color; let accent = s.accent_color; let text = s.text_color; let op = s.opacity;
     s.theme_brush = create_brush(d2d, theme, op as f32 / 255.0);
-    s.input_bg_brush = create_brush(d2d, input, 1.0);
+    s.input_bg_brush = create_brush(d2d, input, op as f32 / 255.0);
     s.accent_brush = create_brush(d2d, accent, 1.0);
     s.text_brush = create_brush(d2d, text, 1.0);
     let white = D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
@@ -196,6 +196,9 @@ pub unsafe fn rebuild_text_format(s: &mut AppState) {
 }
 
 unsafe fn make_text_format(factory: *const IDWriteFactory, family: &[u16], locale: &[u16], sz: f32) -> Option<IDWriteTextFormat> {
+    // 通知 DWrite 刷新字体缓存（拾取刚刚用 AddFontResourceExW 注册的私有字体）
+    let mut coll: Option<IDWriteFontCollection> = None;
+    let _ = (*factory).GetSystemFontCollection(&mut coll, true);
     let tf = (*factory).CreateTextFormat(
         PCWSTR(family.as_ptr()),
         None as Option<&IDWriteFontCollection>,
@@ -236,7 +239,6 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.scroll_offset = 0;
     s.search_query.clear();
     s.composing.clear();
-    let _ = DestroyCaret();
     let _ = ShowWindow(h, SW_HIDE);
     let hp = GetCurrentProcess();
     let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
@@ -365,9 +367,9 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
                 brush.SetColor(&c as *const _);
             }
         }
-        if old_input_bg != s.input_bg_color {
+        if old_input_bg != s.input_bg_color || old_opacity != s.opacity {
             if let Some(ref brush) = s.input_bg_brush {
-                let c = color_to_d2d(s.input_bg_color, 1.0);
+                let c = color_to_d2d(s.input_bg_color, s.opacity as f32 / 255.0);
                 brush.SetColor(&c as *const _);
             }
         }
@@ -469,30 +471,9 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
             let _ = SetForegroundWindow(h);
         }
         let _ = SetFocus(h);
-        create_input_caret(h, s);
         // 强制立即重绘
         let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
     }
 }
 
-/// 创建输入光标（仍用 GDI caret，但用 DWrite 度量文本）
-pub unsafe fn create_input_caret(h: HWND, s: &AppState) {
-    let caret_h = font_px(s.font_size, s.dpi);
-    let _ = CreateCaret(h, Some(HBITMAP(ptr::null_mut())), 2, caret_h as i32);
-    let cx = s.input_rect.left + 8;
-    let cy = s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2;
-    let _ = SetCaretPos(cx, cy);
-    let _ = ShowCaret(Some(h));
-}
 
-/// 更新光标位置至当前输入位置
-pub unsafe fn update_caret(s: &AppState, _h: HWND) {
-    if !s.visible { return; }
-    let caret_h = font_px(s.font_size, s.dpi);
-    let prefix = &s.input_text[..s.cursor_pos];
-    let display = prefix.replace("&", "&&");
-    let w = measure_text_width(s, &display);
-    let cx = s.input_rect.left + 8 + w as i32 + 1;
-    let cy = s.input_rect.top + ((s.input_rect.bottom - s.input_rect.top) - caret_h) / 2;
-    let _ = SetCaretPos(cx, cy);
-}

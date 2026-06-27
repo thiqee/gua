@@ -512,23 +512,58 @@ fn read_font_family(data: &[u8]) -> Option<String> {
 pub fn load_private_fonts() -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "gdi32")]
-    extern "system" { fn AddFontResourceExW(lpszFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32; }
+    extern "system" {
+        fn AddFontResourceExW(lpszFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
+        fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
+    }
     const FR_PRIVATE: u32 = 0x10;
     let dir = std::fs::read_dir("fonts").ok()?;
     let cwd = std::env::current_dir().ok()?;
     let mut entries: Vec<_> = dir.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
+
+    // 收集当前所有字体文件的完整路径
+    let mut current: Vec<String> = Vec::new();
     for entry in &entries {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         if ext != "ttf" && ext != "otf" { continue; }
         let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
-        let ws: Vec<u16> = full.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe { AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+        current.push(full.to_string_lossy().to_string());
+    }
+
+    unsafe {
+        // 读取当前登记表（通过裸指针避免 static_mut_refs 警告）
+        let prev = core::ptr::read(core::ptr::addr_of!(REGISTERED_FONTS));
+        // 取消注册已删除的字体
+        for old in &prev {
+            if !current.contains(old) {
+                let ws: Vec<u16> = std::ffi::OsStr::new(old).encode_wide().chain(Some(0)).collect();
+                RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
+            }
+        }
+        // 注册新增的字体
+        for f in &current {
+            if !prev.contains(f) {
+                let ws: Vec<u16> = std::ffi::OsStr::new(f).encode_wide().chain(Some(0)).collect();
+                AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
+            }
+        }
+        core::ptr::write(core::ptr::addr_of_mut!(REGISTERED_FONTS), current);
+    }
+
+    // 返回第一个字体的家族名（给没有配 _font 的场景自动选择）
+    for entry in &entries {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "ttf" && ext != "otf" { continue; }
+        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
         if let Ok(data) = std::fs::read(&full) { if let Some(name) = read_font_family(&data) { return Some(name); } }
     }
     None
 }
+
+static mut REGISTERED_FONTS: Vec<String> = Vec::new();
 
 // ── 匹配 ────────────────────────────────────────────────────────
 
