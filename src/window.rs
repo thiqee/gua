@@ -352,7 +352,6 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         s.text_color = cfg_color(&raw, "_text_color", s.text_color);
         let old_status_font_size = s.status_font_size;
         s.status_font_size = cfg_f32(&raw, "_status_font_size", s.status_font_size);
-        s.always_on_top = cfg_bool(&raw, "_always_on_top", s.always_on_top);
         s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
         s.case_sensitive = cfg_bool(&raw, "_case_sensitive", s.case_sensitive);
         s.fuzzy_enabled = cfg_bool(&raw, "_fuzzy_match", s.fuzzy_enabled);
@@ -418,9 +417,6 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         s.config_mtime = cur;
         plugin::notify_reload(&plugin_configs);
 
-        // 置顶样式变更
-        let after = if s.always_on_top { Some(HWND_TOPMOST) } else { Some(HWND_NOTOPMOST) };
-        let _ = SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
     (config_changed, font_name, font_size)
 }

@@ -312,6 +312,12 @@ pub unsafe extern "system" fn wndproc(
             let id = (wp.0 as u32 & 0xFFFF) as u16;
             match id {
                 IDM_TOGGLE => { toggle_win(h, s); return LRESULT(0); }
+                IDM_SETTINGS => {
+                    if let Some(r) = gua_renderer(s) {
+                        crate::settings::open_settings(h, r);
+                    }
+                    return LRESULT(0);
+                }
                 IDM_OPEN_CONFIG => {
                     let p = to_w(CONFIG_FILE);
                     let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);

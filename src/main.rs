@@ -7,7 +7,9 @@ mod config;
 mod draw;
 mod executor;
 mod plugin;
+mod settings;
 mod state;
+mod widget;
 mod tray;
 mod window;
 mod wndproc;
@@ -63,7 +65,6 @@ fn main() -> Result<()> {
         let width = cfg_i32(&raw_entries, "_width", WW);
         let max_results = cfg_usize(&raw_entries, "_max_results", MV);
         let round_corner = cfg_i32(&raw_entries, "_round_corner", 12);
-        let always_on_top = cfg_bool(&raw_entries, "_always_on_top", true);
         let opacity = cfg_usize(&raw_entries, "_opacity", 255).min(255) as u8;
         let case_sensitive = cfg_bool(&raw_entries, "_case_sensitive", true);
         let fuzzy_enabled = cfg_bool(&raw_entries, "_fuzzy_match", FUZZY_MATCH_DEFAULT);
@@ -104,8 +105,7 @@ fn main() -> Result<()> {
         if RegisterClassW(&wc) == 0 { return Err(windows::core::Error::from(HRESULT(-2147467259))); }
 
         let cn2 = to_w("Gua");
-        let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP
-            | if always_on_top { WS_EX_TOPMOST } else { WINDOW_EX_STYLE::default() };
+        let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
         let hwnd = CreateWindowExW(
             ex_style,
             PCWSTR(cn2.as_ptr()),
@@ -137,7 +137,6 @@ fn main() -> Result<()> {
             max_results,
             width,
             round_corner,
-            always_on_top,
             opacity,
             case_sensitive,
             fuzzy_enabled,
@@ -167,6 +166,7 @@ fn main() -> Result<()> {
 
         let boxed = Box::into_raw(Box::new(state));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, boxed as isize);
+        MAIN_HWND = hwnd.0 as usize;
 
         // 创建渲染器
         let s = &mut *boxed;

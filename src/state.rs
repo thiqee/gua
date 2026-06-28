@@ -34,6 +34,7 @@ pub const TRAY_ID: u32 = 1;
 pub const IDM_TOGGLE: u16 = 100;
 pub const IDM_OPEN_CONFIG: u16 = 101;
 pub const IDM_EXIT: u16 = 102;
+pub const IDM_SETTINGS: u16 = 103;
 pub const MOD_ALT: u32 = 1;
 pub const MOD_CONTROL: u32 = 2;
 pub const MOD_SHIFT: u32 = 4;
@@ -267,6 +268,9 @@ fn vk_code(name: &str) -> Option<u32> {
         "-" | "MINUS" | "HYPHEN" => Some(0xBD),
         "=" | "EQUALS" | "EQUAL" => Some(0xBB),
         "`" | "BACKTICK" | "TILDE" | "GRAVE" => Some(0xC0),
+        "*" | "MULTIPLY" => Some(0x6A),
+        "+" | "ADD" | "PLUS" => Some(0x6B),
+        "SEPARATOR" | "SEP" => Some(0x6C),
         _ => None,
     }
 }
@@ -408,7 +412,6 @@ pub struct AppState {
     pub max_results: usize,
     pub width: i32,
     pub round_corner: i32,
-    pub always_on_top: bool,
     pub opacity: u8,
     pub case_sensitive: bool,
     pub hide_on_focus_loss: bool,
@@ -563,7 +566,34 @@ pub fn load_private_fonts() -> Option<String> {
     None
 }
 
+pub fn scan_font_families() -> Vec<String> {
+    let dir = match std::fs::read_dir("fonts") {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let cwd = std::env::current_dir().ok();
+    let mut result: Vec<String> = Vec::new();
+    let mut entries: Vec<_> = dir.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in &entries {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "ttf" && ext != "otf" { continue; }
+        let full = if path.is_absolute() { path } else if let Some(ref cwd) = cwd { cwd.join(&path) } else { continue; };
+        if let Ok(data) = std::fs::read(&full) {
+            if let Some(name) = read_font_family(&data) {
+                if !result.contains(&name) {
+                    result.push(name);
+                }
+            }
+        }
+    }
+    result
+}
+
 static mut REGISTERED_FONTS: Vec<String> = Vec::new();
+
+pub static mut MAIN_HWND: usize = 0;
 
 // ── 匹配 ────────────────────────────────────────────────────────
 

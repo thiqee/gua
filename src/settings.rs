@@ -1,0 +1,743 @@
+// Gua — 设置面板（鸿蒙设计风格）
+
+use std::ptr;
+use windows::core::*;
+use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::Common::*;
+use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::LibraryLoader::*;
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+use crate::state::*;
+use crate::widget::*;
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetAsyncKeyState(vKey: i32) -> i16;
+}
+
+#[link(name = "gdi32")]
+extern "system" {
+    fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> HRGN;
+    fn SetWindowRgn(h: HWND, hRgn: HRGN, bRedraw: BOOL) -> i32;
+}
+
+const S_W: i32 = 780;
+const S_H: i32 = 540;
+const TITLE_H: f32 = 30.0;
+const BOTTOM_H: f32 = 52.0;
+const SIDEBAR_W: f32 = 140.0;
+const CONTENT_L: f32 = 140.0;
+const CONTENT_PAD: f32 = 24.0;
+const ACCENT: (f32, f32, f32) = (0.29, 0.53, 0.80);
+
+#[allow(dead_code)]
+pub struct SettingsWin {
+    pub hwnd: HWND,
+    swap_chain: IDXGISwapChain1,
+    d2d_context: ID2D1DeviceContext,
+    target: Option<ID2D1Bitmap1>,
+    widgets: Vec<Box<dyn Widget>>,
+    cards: Vec<D2D_RECT_F>,
+    cat: usize,
+    sel_cat: usize,
+    scroll_y: f32,
+    content_h: f32,
+    focused_idx: Option<usize>,
+    capturing_hotkey: bool,
+    mod_held: [bool; 4],  // [Ctrl, Alt, Shift, Win]
+    close_hovered: bool,
+    save_hovered: bool,
+}
+
+#[allow(static_mut_refs)]
+static mut SETTINGS: Option<SettingsWin> = None;
+
+unsafe fn main_state() -> *mut AppState {
+    let hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    if hwnd.0.is_null() { return ptr::null_mut(); }
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    ptr as *mut AppState
+}
+
+fn card_hdr(name: &str, w: &mut Vec<Box<dyn Widget>>, y: &mut f32, cx: f32, card_r: f32) {
+    w.push(Box::new(GroupHeader::new(name)));
+    w.last_mut().unwrap().set_bounds(D2D_RECT_F { left: cx, top: *y, right: card_r, bottom: *y + 28.0 });
+    *y += 36.0;
+}
+
+fn card_bg(cards: &mut Vec<D2D_RECT_F>, y: &mut f32, card_l: f32, card_r: f32, ct: f32) {
+    cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: *y });
+}
+
+fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -> Vec<Box<dyn Widget>> {
+    cards.clear();
+    let mut w: Vec<Box<dyn Widget>> = Vec::new();
+
+    let cx = CONTENT_L + CONTENT_PAD;
+    let cw = (S_W as f32) - CONTENT_L - CONTENT_PAD - CONTENT_PAD;
+    let card_l = cx;
+    let card_r = cx + cw;
+    let inner_l = cx + 14.0;
+    let inner_w = cw - 28.0;
+    let mut y = TITLE_H + CONTENT_PAD;
+
+    let inp_l = 96.0;
+    let inp_w = 152.0;
+    let wide_l = 116.0;
+    let tog_l = inner_l + inner_w - 48.0;
+
+    match cat {
+        0 => {
+            // ── 快捷键 ──
+            card_hdr("快捷键", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            let mut kb = KeyBindingInput::new("Alt+Space");
+            kb.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 44.0 });
+            w.push(Box::new(kb));
+            y += 56.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+
+            // ── 开关设置 ──
+            card_hdr("开关设置", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            for (i, (label, checked)) in [("失去焦点自动隐藏", true), ("模糊匹配", true), ("拼音搜索", true)].iter().enumerate() {
+                let row_y = y + 10.0 + i as f32 * 38.0;
+                let mut lbl = Label::new(label);
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inner_w - 56.0, bottom: row_y + 28.0 });
+                w.push(Box::new(lbl));
+                let mut sw = ToggleSwitch::new(*checked);
+                sw.set_bounds(D2D_RECT_F { left: tog_l, top: row_y, right: tog_l + 48.0, bottom: row_y + 28.0 });
+                w.push(Box::new(sw));
+            }
+            y += 10.0 + 3.0 * 38.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+
+            // ── 文本设置 ──
+            card_hdr("文本设置", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            for (i, (label, val)) in [("黑名单程序", "notepad.exe, calc.exe"), ("多音字追加读音", "茄=qie, 了=le")].iter().enumerate() {
+                let row_y = y + 10.0 + i as f32 * 130.0;
+                let mut lbl = Label::new(label);
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y + 20.0, right: inner_l + wide_l - 8.0, bottom: row_y + 44.0 });
+                w.push(Box::new(lbl));
+                let mut inp = MultilineTextInput::new(val);
+                inp.set_bounds(D2D_RECT_F { left: inner_l + wide_l, top: row_y + 20.0, right: inner_l + inner_w, bottom: row_y + 120.0 });
+                w.push(Box::new(inp));
+            }
+            y += 10.0 + 2.0 * 130.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+        }
+
+        1 => {
+            // ── 颜色 ──
+            card_hdr("颜色", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            for (i, (label, val)) in [("背景色", "#1E1E1E"), ("输入框色", "#2A2A2A"), ("高亮色", "#4A6FA5"), ("文字色", "#CCCCCC")].iter().enumerate() {
+                let row_y = y + 10.0 + i as f32 * 38.0;
+                let mut lbl = Label::new(label);
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
+                w.push(Box::new(lbl));
+                let mut inp = TextInput::new(val);
+                inp.center = true;
+                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
+                w.push(Box::new(inp));
+            }
+            y += 10.0 + 4.0 * 38.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+
+            // ── 字体 ──
+            card_hdr("字体", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            let font_names = scan_font_families();
+            let s_main = unsafe { main_state() };
+            let current_font = if !s_main.is_null() { unsafe { (*s_main).font_name.clone() } } else { "Segoe UI".to_string() };
+            let font_options = if font_names.is_empty() {
+                vec![current_font.clone()]
+            } else {
+                let mut opts = font_names;
+                if !opts.contains(&current_font) { opts.insert(0, current_font.clone()); }
+                opts
+            };
+            let row_y0 = y + 10.0;
+            let mut lbl0 = Label::new("字体名称");
+            lbl0.set_bounds(D2D_RECT_F { left: inner_l, top: row_y0, right: inner_l + inp_l - 8.0, bottom: row_y0 + 28.0 });
+            w.push(Box::new(lbl0));
+            let mut dd = Dropdown::new(&font_options, &current_font);
+            dd.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y0, right: inner_l + inp_l + inp_w, bottom: row_y0 + 28.0 });
+            w.push(Box::new(dd));
+            for (i, (label, val)) in [("字号", "18"), ("状态栏字号", "12")].iter().enumerate() {
+                let row_y = y + 10.0 + (i + 1) as f32 * 38.0;
+                let mut lbl = Label::new(label);
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
+                w.push(Box::new(lbl));
+                let mut inp = TextInput::new(val);
+                inp.center = true;
+                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
+                w.push(Box::new(inp));
+            }
+            y += 10.0 + 3.0 * 38.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+
+            // ── 布局 ──
+            card_hdr("布局", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            for (i, (label, val)) in [("透明度", "255"), ("圆角大小", "12"), ("水平位置 (%)", "50"), ("垂直位置 (%)", "40"), ("宽度", "500"), ("最多条目", "8")].iter().enumerate() {
+                let row_y = y + 10.0 + i as f32 * 38.0;
+                let mut lbl = Label::new(label);
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
+                w.push(Box::new(lbl));
+                let mut inp = TextInput::new(val);
+                inp.center = true;
+                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
+                w.push(Box::new(inp));
+            }
+            y += 10.0 + 6.0 * 38.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+        }
+
+        _ => {
+            // ── 识别码列表 ──
+            card_hdr("识别码列表", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            let s_main = unsafe { main_state() };
+            let entries = if !s_main.is_null() {
+                let s = unsafe { &*s_main };
+                s.entries.iter().filter(|e| !e.key.starts_with('_')).collect::<Vec<_>>()
+            } else { Vec::new() };
+            let mut lbl = Label::new(&if entries.is_empty() {
+                "暂无识别码，请在 config.toml 中添加。".to_string()
+            } else {
+                format!("共 {} 条识别码（只读预览）", entries.len())
+            });
+            lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 28.0 });
+            w.push(Box::new(lbl));
+            for (i, e) in entries.iter().enumerate().take(20) {
+                let ly = y + 38.0 + i as f32 * 22.0;
+                let txt = format!("[{}] {} → {}", e.category.as_deref().unwrap_or("?"), e.key, e.value);
+                let mut l = Label::new(&txt);
+                l.set_bounds(D2D_RECT_F { left: inner_l + 4.0, top: ly, right: inner_l + inner_w, bottom: ly + 20.0 });
+                w.push(Box::new(l));
+            }
+            y += 10.0 + 28.0 + entries.len().min(20) as f32 * 22.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+        }
+    }
+
+    *content_h = y;
+    w
+}
+
+pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
+    if let Some(ref s) = SETTINGS {
+        let _ = ShowWindow(s.hwnd, SW_SHOW);
+        let _ = SetForegroundWindow(s.hwnd);
+        return;
+    }
+
+    let inst = GetModuleHandleW(None).unwrap();
+    let cn = to_w("Gua_Settings");
+    let wc = WNDCLASSW {
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(settings_proc),
+        hInstance: inst.into(),
+        hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+        hbrBackground: HBRUSH(ptr::null_mut()),
+        lpszClassName: PCWSTR(cn.as_ptr()),
+        ..Default::default()
+    };
+    RegisterClassW(&wc);
+
+    let hwnd_s = CreateWindowExW(
+        WINDOW_EX_STYLE::default(), PCWSTR(cn.as_ptr()), w!("Gua 设置"),
+        WS_POPUP,
+        0, 0, S_W, S_H, None, None, Some(inst.into()), None,
+    ).unwrap();
+
+    let hrgn = CreateRoundRectRgn(0, 0, S_W + 1, S_H + 1, 12, 12);
+    if !hrgn.0.is_null() { SetWindowRgn(hwnd_s, hrgn, true.into()); }
+
+    let mon = MonitorFromWindow(hwnd_s, MONITOR_DEFAULTTONEAREST);
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if GetMonitorInfoW(mon, &mut mi).as_bool() {
+        let x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - S_W) / 2;
+        let y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - S_H) / 2;
+        let _ = SetWindowPos(hwnd_s, Some(HWND_TOP), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    }
+
+    let dxgi_device: IDXGIDevice = r.d3d_device.cast().unwrap();
+    let adapter = dxgi_device.GetAdapter().unwrap();
+    let factory: IDXGIFactory2 = adapter.GetParent().unwrap();
+
+    let desc = DXGI_SWAP_CHAIN_DESC1 {
+        Width: S_W as u32, Height: S_H as u32, Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Stereo: false.into(), SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 2,
+        Scaling: DXGI_SCALING_NONE, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        AlphaMode: DXGI_ALPHA_MODE_IGNORE, Flags: 0u32,
+    };
+    let sc = factory.CreateSwapChainForHwnd(&r.d3d_device, hwnd_s, &desc, None, None).unwrap();
+
+    let d2d = r.d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE).unwrap();
+    let back: IDXGISurface = sc.GetBuffer(0).unwrap();
+    let props = D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
+        dpiX: 96.0, dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        colorContext: std::mem::ManuallyDrop::new(None),
+    };
+    let target = d2d.CreateBitmapFromDxgiSurface(&back, Some(&props)).unwrap();
+    d2d.SetTarget(&target);
+
+    let win = SettingsWin {
+        hwnd: hwnd_s, swap_chain: sc, d2d_context: d2d,
+        target: Some(target), widgets: Vec::new(), cards: Vec::new(),
+        cat: 0, sel_cat: 99, scroll_y: 0.0, content_h: 0.0,
+        focused_idx: None, capturing_hotkey: false,
+        mod_held: [false; 4],
+        close_hovered: false, save_hovered: false,
+    };
+    SETTINGS = Some(win);
+    let _ = ShowWindow(hwnd_s, SW_SHOW);
+}
+
+fn format_hotkey_string(vk: u32, mod_held: &[bool; 4]) -> String {
+    let has_mod = mod_held[0] || mod_held[1] || mod_held[2] || mod_held[3];
+    let mods: [bool; 4] = if has_mod {
+        *mod_held
+    } else {
+        // fallback: GetAsyncKeyState
+        unsafe {
+            [
+                GetAsyncKeyState(0x11) < 0,
+                GetAsyncKeyState(0x12) < 0,
+                GetAsyncKeyState(0x10) < 0,
+                GetAsyncKeyState(0x5B) < 0 || GetAsyncKeyState(0x5C) < 0,
+            ]
+        }
+    };
+    let mod_names = ["Ctrl", "Alt", "Shift", "Win"];
+    let mut parts: Vec<&str> = Vec::new();
+    for (i, &m) in mods.iter().enumerate() { if m { parts.push(mod_names[i]); } }
+    if parts.is_empty() { return String::new(); }
+    let key_name = match vk {
+        0x20 => "Space", 0x0D => "Enter", 0x09 => "Tab", 0x08 => "Backspace", 0x1B => "Escape",
+        0x2E => "Delete", 0x2D => "Insert", 0x24 => "Home", 0x23 => "End",
+        0x21 => "PageUp", 0x22 => "PageDown",
+        0x25 => "Left", 0x26 => "Up", 0x27 => "Right", 0x28 => "Down",
+        0x6E => { parts.push("Separator"); return parts.join("+"); }
+        0x6F => { parts.push("/"); return parts.join("+"); }
+        0x70..=0x87 => { let n = vk - 0x6F; return format!("{}F{}", parts.join("+"), n); }
+        0x41..=0x5A => { let c = (vk as u8 - 0x41 + b'A') as char; parts.push(Box::leak(Box::new(c.to_string())).as_str()); return parts.join("+"); }
+        0x30..=0x39 => { let c = (vk as u8 - 0x30 + b'0') as char; parts.push(Box::leak(Box::new(c.to_string())).as_str()); return parts.join("+"); }
+        0x6A => { parts.push("*"); return parts.join("+"); }
+        0x6B => { parts.push("+"); return parts.join("+"); }
+        0x6D => { parts.push("-"); return parts.join("+"); }
+        0xBC => { parts.push(","); return parts.join("+"); }
+        0xBE => { parts.push("."); return parts.join("+"); }
+        0xBA => { parts.push(";"); return parts.join("+"); }
+        0xBD => { parts.push("-"); return parts.join("+"); }
+        0xBB => { parts.push("="); return parts.join("+"); }
+        0xDB => { parts.push("["); return parts.join("+"); }
+        0xDD => { parts.push("]"); return parts.join("+"); }
+        0xDC => { parts.push("\\"); return parts.join("+"); }
+        0xBF => { parts.push("/"); return parts.join("+"); }
+        0xC0 => { parts.push("`"); return parts.join("+"); }
+        0xDE => { parts.push("'"); return parts.join("+"); }
+        _ => { return String::new(); }
+    };
+    parts.push(key_name);
+    parts.join("+")
+}
+
+unsafe fn set_capturing(s: &mut SettingsWin, capturing: bool) {
+    if s.capturing_hotkey == capturing { return; }
+    s.capturing_hotkey = capturing;
+    let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    if main_hwnd.0.is_null() { return; }
+    if capturing {
+        let _ = UnregisterHotKey(main_hwnd, HOTKEY_ID);
+    } else {
+        let s_main = main_state();
+        if !s_main.is_null() {
+            let ms = &*s_main;
+            let _ = RegisterHotKey(main_hwnd, HOTKEY_ID, ms.mod_keys, ms.hotkey_vk);
+        }
+    }
+}
+
+unsafe fn clear_focus(s: &mut SettingsWin) {
+    if let Some(idx) = s.focused_idx.take() {
+        if idx < s.widgets.len() { s.widgets[idx].set_focused(false); }
+    }
+    set_capturing(s, false);
+}
+
+pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    match msg {
+        WM_CLOSE => {
+            SETTINGS = None;
+            let _ = DestroyWindow(h);
+            return LRESULT(0);
+        }
+
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            BeginPaint(h, &mut ps);
+            let s = match &mut SETTINGS { Some(s) => s, None => { let _ = EndPaint(h, &ps); return LRESULT(0); } };
+
+            if s.cat != s.sel_cat {
+                s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
+                s.sel_cat = s.cat;
+                s.scroll_y = 0.0;
+                s.focused_idx = None;
+                set_capturing(s, false);
+                s.mod_held = [false; 4];
+            }
+
+            let _ = s.d2d_context.BeginDraw();
+            let _ = s.d2d_context.Clear(Some(&D2D1_COLOR_F { r: 0.08, g: 0.08, b: 0.08, a: 1.0 } as *const _));
+
+            let s_main = main_state();
+            let dwf = if !s_main.is_null() { gua_renderer(&*s_main).map(|r| r.dwrite_factory.clone()) } else { None };
+            let (ar, ag, ab) = if !s_main.is_null() { let s = &*s_main; let c = color_to_d2d(s.accent_color, 1.0); (c.r, c.g, c.b) } else { ACCENT };
+
+            // ── 标题栏 ──
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.05, 0.05, 0.05, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: 0.0, right: S_W as f32, bottom: TITLE_H } as *const _, &b);
+            }
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.12, 0.12, 0.12, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: TITLE_H - 1.0, right: S_W as f32, bottom: TITLE_H } as *const _, &b);
+            }
+            if let Some(ref dwf) = dwf {
+                let f = to_w("Microsoft YaHei"); let l = to_w("en-us");
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l.as_ptr())) {
+                    let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                    if let Some(b) = mk_brush_(&s.d2d_context, 0.45, 0.45, 0.45, 1.0) {
+                        s.d2d_context.DrawText(&to_w("Gua 设置"), &tf, &D2D_RECT_F { left: 16.0, top: 0.0, right: 120.0, bottom: TITLE_H } as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+                    }
+                }
+            }
+
+            // ── 侧边栏 ──
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.06, 0.06, 0.06, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: TITLE_H, right: SIDEBAR_W, bottom: S_H as f32 - BOTTOM_H } as *const _, &b);
+            }
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.14, 0.14, 0.14, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: SIDEBAR_W - 1.0, top: TITLE_H, right: SIDEBAR_W, bottom: S_H as f32 - BOTTOM_H } as *const _, &b);
+            }
+            let names = ["通用", "外观", "识别码"];
+            for (i, name) in names.iter().enumerate() {
+                let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
+                let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + 38.0 };
+                let sel = i == s.cat;
+                if sel {
+                    if let Some(b) = mk_brush_(&s.d2d_context, ar, ag, ab, 1.0) {
+                        s.d2d_context.FillRectangle(&D2D_RECT_F { left: 4.0, top: btn_top + 4.0, right: 7.0, bottom: btn_top + 34.0 } as *const _, &b);
+                    }
+                    if let Some(b) = mk_brush_(&s.d2d_context, ar, ag, ab, 0.15) {
+                        s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: btn, radiusX: 6.0, radiusY: 6.0 } as *const _, &b);
+                    }
+                }
+                let (rr, gg, bb) = if sel { (0.85, 0.85, 0.85) } else { (0.50, 0.50, 0.50) };
+                if let Some(b) = mk_brush_(&s.d2d_context, rr, gg, bb, 1.0) {
+                    if let Some(ref dwf) = dwf {
+                        let f2 = to_w("Microsoft YaHei"); let l2 = to_w("en-us");
+                        if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f2.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(l2.as_ptr())) {
+                            let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                            let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                            s.d2d_context.DrawText(&to_w(name), &tf, &btn as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+                        }
+                    }
+                }
+            }
+
+            // ── 内容区 ──
+            s.d2d_context.PushAxisAlignedClip(&D2D_RECT_F { left: CONTENT_L, top: TITLE_H, right: S_W as f32, bottom: S_H as f32 - BOTTOM_H } as *const _, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+            #[repr(C)]
+            struct Mtx { _11: f32, _12: f32, _21: f32, _22: f32, _31: f32, _32: f32 }
+            let mtx = Mtx { _11: 1.0, _12: 0.0, _21: 0.0, _22: 1.0, _31: 0.0, _32: -s.scroll_y };
+            s.d2d_context.SetTransform(&mtx as *const _ as *const _);
+
+            for card in &s.cards {
+                if let Some(b) = mk_brush_(&s.d2d_context, 0.14, 0.14, 0.14, 1.0) {
+                    s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: *card, radiusX: 8.0, radiusY: 8.0 } as *const _, &b);
+                }
+            }
+            if let Some(dwrite) = dwf.clone() {
+                let res = D2DRes { d2d: s.d2d_context.clone(), dwrite };
+                for widget in &s.widgets { widget.draw(&res); }
+                for widget in &s.widgets { widget.draw_overlay(&res); }
+            }
+
+            let ident = Mtx { _11: 1.0, _12: 0.0, _21: 0.0, _22: 1.0, _31: 0.0, _32: 0.0 };
+            s.d2d_context.SetTransform(&ident as *const _ as *const _);
+            s.d2d_context.PopAxisAlignedClip();
+
+            // ── 底部操作栏 ──
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.06, 0.06, 0.06, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: S_H as f32 - BOTTOM_H, right: S_W as f32, bottom: S_H as f32 } as *const _, &b);
+            }
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.12, 0.12, 0.12, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: S_H as f32 - BOTTOM_H, right: S_W as f32, bottom: S_H as f32 - BOTTOM_H + 1.0 } as *const _, &b);
+            }
+
+            let bty = S_H as f32 - BOTTOM_H + 10.0;
+            let bby = S_H as f32 - 10.0;
+            let close_l = S_W as f32 - 20.0 - 80.0 * 2.0 - 8.0;
+            let save_l = S_W as f32 - 20.0 - 80.0;
+
+            let cbr = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: close_l, top: bty, right: close_l + 80.0, bottom: bby }, radiusX: 6.0, radiusY: 6.0 };
+            let (cr, cg, cb) = if s.close_hovered { (0.65, 0.20, 0.15) } else { (0.35, 0.35, 0.35) };
+            if let Some(b) = mk_brush_(&s.d2d_context, cr, cg, cb, 1.0) { s.d2d_context.FillRoundedRectangle(&cbr as *const _, &b); }
+            if let Some(ref dwf) = dwf {
+                let f3 = to_w("Microsoft YaHei"); let l3 = to_w("en-us");
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f3.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l3.as_ptr())) {
+                    let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                    let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                    if let Some(b) = mk_brush_(&s.d2d_context, 1.0, 1.0, 1.0, 1.0) {
+                        s.d2d_context.DrawText(&to_w("关闭"), &tf, &cbr.rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+                    }
+                }
+            }
+
+            let sbr_ = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: save_l, top: bty, right: save_l + 80.0, bottom: bby }, radiusX: 6.0, radiusY: 6.0 };
+            let (sar, sag, sab) = if s.save_hovered { ((ar + 0.1).min(1.0), (ag + 0.1).min(1.0), (ab + 0.1).min(1.0)) } else { (ar, ag, ab) };
+            if let Some(b) = mk_brush_(&s.d2d_context, sar, sag, sab, 1.0) { s.d2d_context.FillRoundedRectangle(&sbr_ as *const _, &b); }
+            if let Some(ref dwf) = dwf {
+                let f4 = to_w("Microsoft YaHei"); let l4 = to_w("en-us");
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f4.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l4.as_ptr())) {
+                    let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                    let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                    if let Some(b) = mk_brush_(&s.d2d_context, 1.0, 1.0, 1.0, 1.0) {
+                        s.d2d_context.DrawText(&to_w("保存"), &tf, &sbr_.rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+                    }
+                }
+            }
+
+            let _ = s.d2d_context.EndDraw(None, None);
+            let _ = s.swap_chain.Present(0, DXGI_PRESENT(0));
+            let _ = EndPaint(h, &ps);
+            return LRESULT(0);
+        }
+
+        WM_LBUTTONDOWN => {
+            let x = (lp.0 as u32 & 0xFFFF) as i32 as f32;
+            let y = ((lp.0 as u32 >> 16) & 0xFFFF) as i32 as f32;
+            if let Some(s) = &mut SETTINGS {
+                let bty = S_H as f32 - BOTTOM_H + 10.0;
+                let bby = S_H as f32 - 10.0;
+                let close_l = S_W as f32 - 20.0 - 80.0 * 2.0 - 8.0;
+                let save_l = S_W as f32 - 20.0 - 80.0;
+
+                if x >= close_l && x <= close_l + 80.0 && y >= bty && y <= bby {
+                    SETTINGS = None;
+                    let _ = DestroyWindow(h);
+                    return LRESULT(0);
+                }
+                if x >= save_l && x <= save_l + 80.0 && y >= bty && y <= bby {
+                    return LRESULT(0);
+                }
+
+                if x < SIDEBAR_W {
+                    for i in 0..3 {
+                        let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
+                        let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + 38.0 };
+                        if x >= btn.left && x <= btn.right && y >= btn.top && y <= btn.bottom {
+                            clear_focus(s);
+                            s.cat = i;
+                            let _ = InvalidateRect(Some(h), None, true);
+                            break;
+                        }
+                    }
+                } else {
+                    let _ = SetForegroundWindow(h);
+                    let adj_y = y + s.scroll_y;
+                    let old_idx = s.focused_idx;
+                    set_capturing(s, false);
+                    let s_main_click = main_state();
+                    let click_res = if !s_main_click.is_null() { gua_renderer(&*s_main_click).map(|r| D2DRes { d2d: s.d2d_context.clone(), dwrite: r.dwrite_factory.clone() }) } else { None };
+                    let mut handled = false;
+                    let mut captures = false;
+                    for (i, w) in s.widgets.iter_mut().enumerate() {
+                        let ok = if let Some(ref res) = click_res { w.on_click_with(x, adj_y, res) } else { w.on_click(x, adj_y) };
+                        if ok {
+                            if w.focused() {
+                                s.focused_idx = Some(i);
+                                captures = w.captures_hotkey();
+                                if old_idx != Some(i) {
+                                    if let Some(oi) = old_idx { if oi < s.widgets.len() { s.widgets[oi].set_focused(false); } }
+                                }
+                            }
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if handled { set_capturing(s, captures); }
+                    if !handled { clear_focus(s); }
+                    let _ = InvalidateRect(Some(h), None, true);
+                }
+            }
+            return LRESULT(0);
+        }
+
+        WM_LBUTTONUP => {
+            let x = (lp.0 as u32 & 0xFFFF) as i32 as f32;
+            let y = ((lp.0 as u32 >> 16) & 0xFFFF) as i32 as f32;
+            if let Some(s) = &mut SETTINGS {
+                let adj_y = y + s.scroll_y;
+                for w in &mut s.widgets { w.on_mouse_up(x, adj_y); }
+                let _ = InvalidateRect(Some(h), None, true);
+            }
+            return LRESULT(0);
+        }
+
+        WM_MOUSEMOVE => {
+            let x = (lp.0 as u32 & 0xFFFF) as i32 as f32;
+            let y = ((lp.0 as u32 >> 16) & 0xFFFF) as i32 as f32;
+            if let Some(s) = &mut SETTINGS {
+                let adj_y = y + s.scroll_y;
+                let bw2 = 80.0;
+                let bty = S_H as f32 - BOTTOM_H + 10.0;
+                let bby = S_H as f32 - 10.0;
+                let cl = S_W as f32 - 20.0 - bw2 * 2.0 - 8.0;
+                let sl = S_W as f32 - 20.0 - bw2;
+                let close_hit = x >= cl && x <= cl + bw2 && y >= bty && y <= bby;
+                let save_hit = x >= sl && x <= sl + bw2 && y >= bty && y <= bby;
+                if close_hit != s.close_hovered || save_hit != s.save_hovered {
+                    s.close_hovered = close_hit;
+                    s.save_hovered = save_hit;
+                    let _ = InvalidateRect(Some(h), None, true);
+                }
+                for w in &mut s.widgets { w.on_mouse_move(x, adj_y); }
+            }
+            return LRESULT(0);
+        }
+
+        WM_MOUSEWHEEL => {
+            if let Some(s) = &mut SETTINGS {
+                let delta = (wp.0 as u32 >> 16) as i16;
+                let step = delta as f32 / 120.0 * 24.0;
+                // 先发给聚焦的多行输入框
+                let mut handled = false;
+                if let Some(idx) = s.focused_idx {
+                    if idx < s.widgets.len() {
+                        handled = s.widgets[idx].on_mouse_wheel(step);
+                    }
+                }
+                if !handled {
+                    s.scroll_y = (s.scroll_y - step).clamp(0.0, (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H - CONTENT_PAD)).max(0.0));
+                }
+                let _ = InvalidateRect(Some(h), None, true);
+            }
+            return LRESULT(0);
+        }
+
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
+            let vk = wp.0 as u32;
+            if let Some(s) = &mut SETTINGS {
+                match vk {
+                    0x10 => { s.mod_held[2] = true; }
+                    0x11 => { s.mod_held[0] = true; }
+                    0x12 => { s.mod_held[1] = true; }
+                    0x5B | 0x5C => { s.mod_held[3] = true; }
+                    _ => {}
+                }
+                if s.capturing_hotkey {
+                    match vk {
+                        0x1B => { clear_focus(s); let _ = InvalidateRect(Some(h), None, true); }
+                        0x10 | 0x11 | 0x12 | 0x5B | 0x5C => {}
+                        _ => {
+                            if s.mod_held.iter().any(|&m| m) {
+                                let hotkey_str = format_hotkey_string(vk, &s.mod_held);
+                                if !hotkey_str.is_empty() {
+                                    let idx = s.focused_idx;
+                                    clear_focus(s);
+                                    if let Some(idx) = idx { if idx < s.widgets.len() { s.widgets[idx].set_text(&hotkey_str); } }
+                                    let _ = InvalidateRect(Some(h), None, true);
+                                }
+                            }
+                        }
+                    }
+                } else if vk == 0x1B {
+                    clear_focus(s);
+                    let _ = InvalidateRect(Some(h), None, true);
+                } else if let Some(idx) = s.focused_idx {
+                    if idx < s.widgets.len() {
+                        if s.widgets[idx].on_key_down(vk) { let _ = InvalidateRect(Some(h), None, true); }
+                    }
+                }
+            }
+            return LRESULT(0);
+        }
+
+        WM_KEYUP | WM_SYSKEYUP => {
+            let vk = wp.0 as u32;
+            if let Some(s) = &mut SETTINGS {
+                match vk {
+                    0x10 => { s.mod_held[2] = false; }
+                    0x11 => { s.mod_held[0] = false; }
+                    0x12 => { s.mod_held[1] = false; }
+                    0x5B | 0x5C => { s.mod_held[3] = false; }
+                    _ => {}
+                }
+            }
+            return LRESULT(0);
+        }
+
+        WM_CHAR => {
+            let ch = wp.0 as u32;
+            if let Some(s) = &mut SETTINGS {
+                if let Some(idx) = s.focused_idx {
+                    if idx < s.widgets.len() {
+                        if s.widgets[idx].on_char(ch) { let _ = InvalidateRect(Some(h), None, true); }
+                    }
+                }
+            }
+            return LRESULT(0);
+        }
+
+        WM_NCHITTEST => {
+            let x_screen = (lp.0 as u32 & 0xFFFF) as i32;
+            let y_screen = ((lp.0 as u32 >> 16) & 0xFFFF) as i32;
+            let mut rc = RECT::default();
+            let _ = GetWindowRect(h, &mut rc);
+            let rel_x = x_screen - rc.left;
+            let rel_y = y_screen - rc.top;
+            if rel_y >= 0 && rel_y < TITLE_H as i32 && rel_x >= SIDEBAR_W as i32 {
+                return LRESULT(HTCAPTION as isize);
+            }
+            return LRESULT(HTCLIENT as isize);
+        }
+
+        WM_DESTROY => { SETTINGS = None; return LRESULT(0); }
+        _ => {}
+    }
+    DefWindowProcW(h, msg, wp, lp)
+}
+
+pub unsafe fn is_open() -> bool { SETTINGS.is_some() }
+
+pub unsafe fn close_settings() {
+    if let Some(ref s) = SETTINGS {
+        let _ = DestroyWindow(s.hwnd);
+    }
+    SETTINGS = None;
+}
+
+unsafe fn mk_brush_(d2d: &ID2D1DeviceContext, r: f32, g: f32, b: f32, a: f32) -> Option<ID2D1SolidColorBrush> {
+    let c = D2D1_COLOR_F { r, g, b, a };
+    d2d.CreateSolidColorBrush(&c as *const _, None).ok()
+}
