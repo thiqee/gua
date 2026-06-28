@@ -13,6 +13,15 @@ pub struct D2DRes {
     pub dwrite: IDWriteFactory,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum WidgetCmd {
+    None,
+    EntryDel(usize),
+    EntryAdd(usize),
+    CatMenu(usize),
+    CatToggle(usize),
+}
+
 pub trait Widget {
     fn draw(&self, res: &D2DRes);
     fn set_bounds(&mut self, r: D2D_RECT_F);
@@ -31,6 +40,7 @@ pub trait Widget {
     fn captures_hotkey(&self) -> bool { false }
     fn on_mouse_wheel(&mut self, _delta: f32) -> bool { false }
     fn draw_overlay(&self, _res: &D2DRes) {}
+    fn cmd(&self) -> WidgetCmd { WidgetCmd::None }
 }
 
 // ── helpers ──
@@ -452,6 +462,76 @@ impl Widget for TextInput {
             }
         }
         unsafe { res.d2d.PopAxisAlignedClip(); }
+    }
+}
+
+// ── IconButton ──
+
+pub struct IconButton {
+    r: D2D_RECT_F,
+    pub icon: String,
+    hovered: bool,
+    pub cmd: WidgetCmd,
+}
+
+impl IconButton {
+    pub fn new(icon: &str) -> Self {
+        Self { r: D2D_RECT_F::default(), icon: icon.to_string(), hovered: false, cmd: WidgetCmd::None }
+    }
+}
+
+impl Widget for IconButton {
+    fn cmd(&self) -> WidgetCmd { self.cmd }
+    fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
+    fn on_mouse_move(&mut self, x: f32, y: f32) { self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom; }
+    fn on_mouse_leave(&mut self) { self.hovered = false; }
+    fn set_focused(&mut self, _val: bool) {}
+    fn on_click(&mut self, x: f32, y: f32) -> bool {
+        x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom
+    }
+
+    fn draw(&self, res: &D2DRes) {
+        let c = if self.hovered { 0.85 } else { 0.55 };
+        if let Some(b) = mk_brush(&res.d2d, c, c, c, 1.0) {
+            if let Some(tf) = tf_vcenter(&res.dwrite, 12.0) {
+                draw_text(&res.d2d, &self.icon, &tf, &self.r, &b);
+            }
+        }
+    }
+}
+
+// ── ClickLabel ──
+
+pub struct ClickLabel {
+    r: D2D_RECT_F,
+    pub text: String,
+    hovered: bool,
+    pub cmd: WidgetCmd,
+}
+
+impl ClickLabel {
+    pub fn new(text: &str) -> Self {
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), hovered: false, cmd: WidgetCmd::None }
+    }
+}
+
+impl Widget for ClickLabel {
+    fn cmd(&self) -> WidgetCmd { self.cmd }
+    fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
+    fn on_mouse_move(&mut self, x: f32, y: f32) { self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom; }
+    fn on_mouse_leave(&mut self) { self.hovered = false; }
+    fn set_focused(&mut self, _val: bool) {}
+    fn on_click(&mut self, x: f32, y: f32) -> bool {
+        x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom
+    }
+
+    fn draw(&self, res: &D2DRes) {
+        let c = if self.hovered { 0.85 } else { 0.55 };
+        if let Some(b) = mk_brush(&res.d2d, c, c, c, 1.0) {
+            if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+                draw_text(&res.d2d, &self.text, &tf, &self.r, &b);
+            }
+        }
     }
 }
 

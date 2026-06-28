@@ -37,15 +37,6 @@ const CONTENT_L: f32 = 140.0;
 const CONTENT_PAD: f32 = 24.0;
 const ACCENT: (f32, f32, f32) = (0.29, 0.53, 0.80);
 
-#[derive(Clone, Copy)]
-enum CodeAct {
-    Search,
-    CatHdr(usize),
-    CatMenu(usize),
-    EntryDel(usize),  // global entries[] index
-    EntryAdd(usize),  // category index
-}
-
 #[allow(dead_code)]
 pub struct SettingsWin {
     pub hwnd: HWND,
@@ -66,7 +57,6 @@ pub struct SettingsWin {
     // 识别码 tab state
     codes_search: String,
     codes_version: usize,
-    codes_actions: Vec<CodeAct>,
     cat_expanded: Vec<bool>,
     cat_menu_open: Option<usize>,
     cat_menu_hover: usize,
@@ -236,12 +226,29 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
     w
 }
 
+unsafe fn sync_codes_entries(s: &SettingsWin) {
+    let s_main = main_state();
+    if s_main.is_null() || s.cat != 2 { return; }
+    let state = &mut *s_main;
+    for wi in 0..s.widgets.len() {
+        if let WidgetCmd::EntryDel(gi) = s.widgets[wi].cmd() {
+            if wi >= 3 && gi < state.entries.len() {
+                let key = s.widgets[wi - 3].text().to_string();
+                let val = s.widgets[wi - 2].text().to_string();
+                let desc = s.widgets[wi - 1].text().to_string();
+                state.entries[gi].key = key;
+                state.entries[gi].value = val;
+                state.entries[gi].description = if desc.is_empty() { None } else { Some(desc) };
+            }
+        }
+    }
+}
+
 unsafe fn build_codes_tab(
     cards: &mut Vec<D2D_RECT_F>,
     content_h: &mut f32,
     search: &str,
     cat_expanded: &mut Vec<bool>,
-    actions: &mut Vec<CodeAct>,
 ) -> Vec<Box<dyn Widget>> {
     let cx = CONTENT_L + CONTENT_PAD;
     let cw = (S_W as f32) - CONTENT_L - CONTENT_PAD - CONTENT_PAD;
@@ -258,10 +265,8 @@ unsafe fn build_codes_tab(
     let mut search_inp = TextInput::new(search);
     search_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: card_r - 14.0, bottom: y + 28.0 });
     w.push(Box::new(search_inp));
-    actions.push(CodeAct::Search);
     y += 42.0;
 
-    // Group entries by category
     let s_main = main_state();
     if s_main.is_null() { *content_h = y; return w; }
     let entries = &(*s_main).entries;
@@ -270,7 +275,7 @@ unsafe fn build_codes_tab(
     let search_lower = search.to_lowercase();
     let search_active = !search.is_empty();
 
-    // Build category groups with global indices
+    // Group entries by category with global indices
     let mut cat_map: Vec<(String, Vec<(usize, &config::Entry)>)> = Vec::new();
     for (gi, e) in filtered.iter().enumerate() {
         let cat_name = e.category.as_deref().unwrap_or("未分类").to_string();
@@ -280,55 +285,45 @@ unsafe fn build_codes_tab(
             cat_map.push((cat_name, vec![(gi, e)]));
         }
     }
-
-    // Reorder: put "未分类" at the end
     if let Some(pos) = cat_map.iter().position(|(n, _)| n == "未分类") {
         let uncat = cat_map.remove(pos);
         cat_map.push(uncat);
     }
-
-    // Ensure cat_expanded has enough entries
     while cat_expanded.len() < cat_map.len() {
         cat_expanded.push(true);
     }
 
-    let row_h = 24.0;
-    let btn_w = 28.0;
-    let col_key = 120.0;
-    let col_val = inner_w - col_key - btn_w - 12.0;
+    let row_h = 28.0;
+    let col_key_w = 110.0;
+    let col_val_w = 190.0;
+    let del_w = 24.0;
+    let col_desc_w = inner_w - col_key_w - col_val_w - del_w - 20.0;
+    let menu_btn_w = 44.0;
 
     for (ci, (cat_name, cat_entries)) in cat_map.iter().enumerate() {
         let ct = y;
-        let mut header_drawn = false;
 
-        // Category header
-        let hdr_r = D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w, bottom: y + 28.0 };
-        let mut hdr = TextButton::new(cat_name);
-        hdr.set_bounds(hdr_r);
-        w.push(Box::new(hdr));
-        actions.push(CodeAct::CatHdr(ci));
-        // ⋮ button
-        let menu_r = D2D_RECT_F { left: hdr_r.right - 56.0, top: y, right: hdr_r.right - 30.0, bottom: y + 28.0 };
-        let mut menu_btn = TextButton::new("⋮");
-        menu_btn.set_bounds(menu_r);
-        w.push(Box::new(menu_btn));
-        actions.push(CodeAct::CatMenu(ci));
-        // ▲/▼ arrow label
-        let arrow = if ci < cat_expanded.len() && cat_expanded[ci] { "▲" } else { "▼" };
-        let arr_r = D2D_RECT_F { left: hdr_r.right - 24.0, top: y, right: hdr_r.right - 4.0, bottom: y + 28.0 };
-        let mut arr_lbl = Label::new(arrow);
-        arr_lbl.set_bounds(arr_r);
+        // Category header: [▼ ▲] + name + [⋮]
+        let arr = if ci < cat_expanded.len() && cat_expanded[ci] { "▲" } else { "▼" };
+        let mut arr_lbl = Label::new(arr);
+        arr_lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 20.0, bottom: y + row_h });
         w.push(Box::new(arr_lbl));
-        y += 34.0;
 
-        if !header_drawn {
-            cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: y });
-            header_drawn = true;
-        }
+        let mut name_lbl = ClickLabel::new(cat_name);
+        name_lbl.cmd = WidgetCmd::CatToggle(ci);
+        name_lbl.set_bounds(D2D_RECT_F { left: inner_l + 24.0, top: y, right: inner_l + inner_w - menu_btn_w - 4.0, bottom: y + row_h });
+        w.push(Box::new(name_lbl));
+
+        let mut menu_btn = IconButton::new("⋮");
+        menu_btn.cmd = WidgetCmd::CatMenu(ci);
+        menu_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w, top: y, right: inner_l + inner_w, bottom: y + row_h });
+        w.push(Box::new(menu_btn));
+        y += row_h + 4.0;
+
+        cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: y });
 
         if ci < cat_expanded.len() && cat_expanded[ci] {
-            // Show matching entries only if search active
-            let visible_entries: Vec<(usize, &config::Entry)> = if search_active {
+            let visible: Vec<(usize, &config::Entry)> = if search_active {
                 cat_entries.iter().filter(|(_, e)| {
                     let k = e.key.to_lowercase();
                     let v = e.value.to_lowercase();
@@ -339,53 +334,47 @@ unsafe fn build_codes_tab(
                 cat_entries.clone()
             };
 
-            for (ei, pair) in visible_entries.iter().enumerate() {
-                let &(global_idx, e) = pair;
+            for &(global_idx, e) in &visible {
                 let row_top = y;
-                let label_text = if let Some(ref desc) = e.description {
-                    format!("{}  |  {}", e.key, desc)
-                } else {
-                    format!("{}  →  {}", e.key, e.value)
-                };
-                let lbl_r = D2D_RECT_F { left: inner_l + 8.0, top: row_top, right: inner_l + inner_w - btn_w - 4.0, bottom: row_top + row_h };
-                let mut lbl = Label::new(&label_text);
-                lbl.set_bounds(lbl_r);
-                w.push(Box::new(lbl));
-                // ✕ delete
-                let del_r = D2D_RECT_F { left: inner_l + inner_w - btn_w, top: row_top, right: inner_l + inner_w, bottom: row_top + row_h };
-                let mut del = TextButton::new("✕");
-                del.set_bounds(del_r);
-                w.push(Box::new(del));
-                actions.push(CodeAct::EntryDel(global_idx));
-                y += row_h;
+
+                let mut key_inp = TextInput::new(&e.key);
+                key_inp.set_bounds(D2D_RECT_F { left: inner_l + 4.0, top: row_top, right: inner_l + col_key_w, bottom: row_top + row_h });
+                w.push(Box::new(key_inp));
+
+                let mut val_inp = TextInput::new(&e.value);
+                val_inp.set_bounds(D2D_RECT_F { left: inner_l + col_key_w + 8.0, top: row_top, right: inner_l + col_key_w + col_val_w, bottom: row_top + row_h });
+                w.push(Box::new(val_inp));
+
+                let desc = e.description.as_deref().unwrap_or("");
+                let mut desc_inp = TextInput::new(desc);
+                desc_inp.set_bounds(D2D_RECT_F { left: inner_l + col_key_w + col_val_w + 12.0, top: row_top, right: inner_l + inner_w - del_w - 4.0, bottom: row_top + row_h });
+                w.push(Box::new(desc_inp));
+
+                let mut del_btn = IconButton::new("✕");
+                del_btn.cmd = WidgetCmd::EntryDel(global_idx);
+                del_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - del_w, top: row_top, right: inner_l + inner_w, bottom: row_top + row_h });
+                w.push(Box::new(del_btn));
+
+                y += row_h + 4.0;
             }
 
-            // ＋ add button
-            let add_r = D2D_RECT_F { left: inner_l, top: y, right: inner_l + 120.0, bottom: y + row_h };
-            let mut add = TextButton::new("＋ 添加识别码");
-            add.set_bounds(add_r);
-            w.push(Box::new(add));
-            actions.push(CodeAct::EntryAdd(ci));
+            // ＋ add button on the right
+            let mut add_btn = IconButton::new("＋ 添加识别码");
+            add_btn.cmd = WidgetCmd::EntryAdd(ci);
+            add_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 110.0, top: y, right: inner_l + inner_w, bottom: y + row_h });
+            w.push(Box::new(add_btn));
             y += row_h + 4.0;
         }
 
-        if header_drawn {
-            // Update card bottom
-            let last_idx = cards.len().saturating_sub(1);
-            cards[last_idx].bottom = y;
-        } else {
-            cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: y });
-        }
-
-        y += 8.0;
+        if let Some(last) = cards.last_mut() { last.bottom = y; }
+        y += 4.0;
     }
 
     if cat_map.is_empty() {
-        let empty_txt = if search_active { "无匹配的识别码".to_string() } else { "暂无识别码".to_string() };
-        let mut lbl = Label::new(&empty_txt);
+        let txt = if search_active { "无匹配的识别码" } else { "暂无识别码" };
+        let mut lbl = Label::new(txt);
         lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w, bottom: y + 24.0 });
         w.push(Box::new(lbl));
-        actions.push(CodeAct::Search);
         y += 30.0;
     }
 
@@ -462,8 +451,7 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         mod_held: [false; 4],
         close_hovered: false, save_hovered: false,
         codes_search: String::new(), codes_version: 0,
-        codes_actions: Vec::new(), cat_expanded: Vec::new(),
-        cat_menu_open: None, cat_menu_hover: 0,
+        cat_expanded: Vec::new(), cat_menu_open: None, cat_menu_hover: 0,
     };
     SETTINGS = Some(win);
     let _ = ShowWindow(hwnd_s, SW_SHOW);
@@ -562,13 +550,14 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if s.codes_version > 0 { need_rebuild = true; s.codes_version = 0; }
             }
             if need_rebuild {
+                if s.cat == 2 { sync_codes_entries(s); }
                 s.sel_cat = s.cat;
                 s.scroll_y = 0.0;
                 s.focused_idx = None;
                 set_capturing(s, false);
                 s.mod_held = [false; 4];
                 if s.cat == 2 {
-                    let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded, &mut s.codes_actions);
+                    let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded);
                     s.widgets = widgets;
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
@@ -749,6 +738,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let save_l = S_W as f32 - 20.0 - 80.0;
 
                 if x >= close_l && x <= close_l + 80.0 && y >= bty && y <= bby {
+                    if s.cat == 2 { sync_codes_entries(s); }
                     SETTINGS = None;
                     let _ = DestroyWindow(h);
                     return LRESULT(0);
@@ -762,6 +752,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
                         let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + 38.0 };
                         if x >= btn.left && x <= btn.right && y >= btn.top && y <= btn.bottom {
+                            if s.cat == 2 { sync_codes_entries(s); }
                             clear_focus(s);
                             s.cat = i;
                             let _ = InvalidateRect(Some(h), None, true);
@@ -795,9 +786,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     }
                     if handled {
                         set_capturing(s, captures);
-                        if s.cat == 2 && handled_idx < s.codes_actions.len() {
-                            match s.codes_actions[handled_idx] {
-                                CodeAct::EntryDel(global_idx) => {
+                        if s.cat == 2 && handled_idx < s.widgets.len() {
+                            match s.widgets[handled_idx].cmd() {
+                                WidgetCmd::EntryDel(global_idx) => {
+                                    sync_codes_entries(s);
                                     let s_main = main_state();
                                     if !s_main.is_null() && global_idx < (*s_main).entries.len() {
                                         (*s_main).entries.remove(global_idx);
@@ -806,21 +798,22 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     }
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
-                                CodeAct::EntryAdd(ci) => {
+                                WidgetCmd::EntryAdd(ci) => {
+                                    sync_codes_entries(s);
                                     let s_main = main_state();
                                     if !s_main.is_null() {
                                         let state = &mut *s_main;
                                         let cat_name = {
-                                            let non_cfg: Vec<&config::Entry> = state.entries.iter().filter(|e| !e.key.starts_with('_')).collect();
-                                            let mut cats: Vec<&str> = Vec::new();
-                                            for e in &non_cfg {
-                                                let n = e.category.as_deref().unwrap_or("未分类");
+                                            let mut cats: Vec<String> = Vec::new();
+                                            for e in &state.entries {
+                                                if e.key.starts_with('_') { continue; }
+                                                let n = e.category.as_deref().unwrap_or("未分类").to_string();
                                                 if !cats.contains(&n) { cats.push(n); }
                                             }
-                                            if let Some(p) = cats.iter().position(|n| *n == "未分类") {
+                                            if let Some(p) = cats.iter().position(|n| n == "未分类") {
                                                 let u = cats.remove(p); cats.push(u);
                                             }
-                                            cats.get(ci).map(|s| s.to_string()).unwrap_or("未分类".to_string())
+                                            cats.get(ci).cloned().unwrap_or("未分类".to_string())
                                         };
                                         state.entries.push(config::Entry {
                                             key: "新识别码".to_string(),
@@ -833,7 +826,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     }
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
-                                CodeAct::CatMenu(ci) => {
+                                WidgetCmd::CatMenu(ci) => {
                                     if s.cat_menu_open == Some(ci) {
                                         s.cat_menu_open = None;
                                     } else {
@@ -842,7 +835,8 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     }
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
-                                CodeAct::CatHdr(ci) => {
+                                WidgetCmd::CatToggle(ci) => {
+                                    sync_codes_entries(s);
                                     if ci < s.cat_expanded.len() {
                                         s.cat_expanded[ci] = !s.cat_expanded[ci];
                                         s.sel_cat = 99;
@@ -854,54 +848,45 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         }
                     }
                     if !handled {
-                        if let Some(ci) = s.cat_menu_open {
-                            if ci < s.cards.len() {
-                                let card = s.cards[ci];
-                                let popup_l = (card.right + card.left) / 2.0 - 60.0;
-                                let popup_t = card.top + 34.0;
-                                let adj_y = y + s.scroll_y;
-                                // Check if click on menu items
-                                if adj_y >= popup_t + 4.0 && adj_y < popup_t + 68.0 && x >= popup_l && x < popup_l + 120.0 {
-                                    let item_idx = ((adj_y - popup_t - 4.0) / 28.0) as usize;
-                                    s.cat_menu_open = None;
-                                    if item_idx == 1 && s.cat == 2 {
-                                        // Delete category
-                                        let s_main = main_state();
-                                        if !s_main.is_null() {
-                                            let state = &mut *s_main;
-                                            let cat_name = {
-                                                let mut m: Vec<String> = Vec::new();
-                                                for e in &state.entries {
-                                                    if e.key.starts_with('_') { continue; }
-                                                    let n = e.category.as_deref().unwrap_or("未分类").to_string();
-                                                    if !m.contains(&n) { m.push(n); }
-                                                }
-                                                if let Some(p) = m.iter().position(|n| n == "未分类") {
-                                                    let u = m.remove(p); m.push(u);
-                                                }
-                                                m.get(ci).cloned().unwrap_or_default()
-                                            };
-                                            state.entries.retain(|e| {
-                                                if e.key.starts_with('_') { return true; }
-                                                e.category.as_deref().unwrap_or("未分类") != cat_name
-                                            });
-                                            s.codes_version = 1;
-                                            s.sel_cat = 99;
-                                        }
+                        if s.cat_menu_open.is_some() {
+                            let adj_y = y + s.scroll_y;
+                            let popup_l = CONTENT_L + CONTENT_PAD + (S_W as f32 - CONTENT_L - CONTENT_PAD - CONTENT_PAD) / 2.0 - 60.0;
+                            let popup_t = s.cards.first().map(|c| c.top + 34.0).unwrap_or(30.0);
+                            let on_menu = adj_y >= popup_t + 4.0 && adj_y < popup_t + 68.0 && x >= popup_l && x < popup_l + 120.0;
+                            if on_menu {
+                                let item_idx = ((adj_y - popup_t - 4.0) / 28.0) as usize;
+                                let ci = s.cat_menu_open.unwrap_or(0);
+                                s.cat_menu_open = None;
+                                if item_idx == 1 && s.cat == 2 {
+                                    sync_codes_entries(s);
+                                    let s_main = main_state();
+                                    if !s_main.is_null() {
+                                        let state = &mut *s_main;
+                                        let cat_name = {
+                                            let mut m: Vec<String> = Vec::new();
+                                            for e in &state.entries {
+                                                if e.key.starts_with('_') { continue; }
+                                                let n = e.category.as_deref().unwrap_or("未分类").to_string();
+                                                if !m.contains(&n) { m.push(n); }
+                                            }
+                                            if let Some(p) = m.iter().position(|n| n == "未分类") {
+                                                let u = m.remove(p); m.push(u);
+                                            }
+                                            m.get(ci).cloned().unwrap_or_default()
+                                        };
+                                        state.entries.retain(|e| {
+                                            if e.key.starts_with('_') { return true; }
+                                            e.category.as_deref().unwrap_or("未分类") != cat_name
+                                        });
+                                        s.codes_version = 1;
+                                        s.sel_cat = 99;
                                     }
-                                } else {
-                                    s.cat_menu_open = None;
                                 }
                             } else {
                                 s.cat_menu_open = None;
                             }
                             let _ = InvalidateRect(Some(h), None, true);
                         } else {
-                            if s.cat == 2 {
-                                s.codes_version = 1;
-                                s.sel_cat = 99;
-                                let _ = InvalidateRect(Some(h), None, true);
-                            }
                             clear_focus(s);
                         }
                     }
