@@ -60,6 +60,8 @@ pub struct SettingsWin {
     cat_expanded: Vec<bool>,
     cat_menu_open: Option<usize>,
     cat_menu_hover: usize,
+    scroll_dragging: bool,
+    scroll_drag_start_y: f32,
 }
 
 #[allow(static_mut_refs)]
@@ -263,8 +265,19 @@ unsafe fn build_codes_tab(
 
     // Search box
     let mut search_inp = TextInput::new(search);
-    search_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: card_r - 14.0, bottom: y + 28.0 });
+    search_inp.select_on_focus = false;
+    search_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w - 120.0, bottom: y + 28.0 });
     w.push(Box::new(search_inp));
+
+    let mut exp_all = IconButton::new("▽全部展开");
+    exp_all.cmd = WidgetCmd::ExpandAll;
+    exp_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 116.0, top: y, right: inner_l + inner_w - 56.0, bottom: y + 28.0 });
+    w.push(Box::new(exp_all));
+
+    let mut col_all = IconButton::new("▷全部折叠");
+    col_all.cmd = WidgetCmd::CollapseAll;
+    col_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 52.0, top: y, right: inner_l + inner_w, bottom: y + 28.0 });
+    w.push(Box::new(col_all));
     y += 42.0;
 
     let s_main = main_state();
@@ -289,8 +302,12 @@ unsafe fn build_codes_tab(
         let uncat = cat_map.remove(pos);
         cat_map.push(uncat);
     }
-    while cat_expanded.len() < cat_map.len() {
-        cat_expanded.push(true);
+    // Restore expand state from AppState
+    let sm = main_state();
+    let saved_state = if !sm.is_null() { unsafe { (*sm).codes_cat_state.clone() } } else { Vec::new() };
+    cat_expanded.clear();
+    for i in 0..cat_map.len() {
+        cat_expanded.push(if i < saved_state.len() { saved_state[i] } else { true });
     }
 
     let row_h = 28.0;
@@ -330,11 +347,24 @@ unsafe fn build_codes_tab(
 
         if ci < cat_expanded.len() && cat_expanded[ci] {
             let visible: Vec<(usize, &config::Entry)> = if search_active {
+                let sm = main_state();
+                let (fuzzy, pinyin, overrides) = if !sm.is_null() {
+                    let s = unsafe { &*sm };
+                    (s.fuzzy_enabled, s.pinyin_enabled, &s.pinyin_overrides)
+                } else { (false, false, &HashMap::new()) };
                 cat_entries.iter().filter(|(_, e)| {
                     let k = e.key.to_lowercase();
                     let v = e.value.to_lowercase();
                     let d = e.description.as_deref().unwrap_or("").to_lowercase();
-                    k.contains(&search_lower) || v.contains(&search_lower) || d.contains(&search_lower)
+                    if k.contains(&search_lower) || v.contains(&search_lower) || d.contains(&search_lower) {
+                        return true;
+                    }
+                    if pinyin || fuzzy {
+                        if let Some(lv) = match_level(&e.key, search, false, fuzzy, pinyin, overrides) {
+                            if lv > 0 { return true; }
+                        }
+                    }
+                    false
                 }).cloned().collect()
             } else {
                 cat_entries.clone()
@@ -452,6 +482,7 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         close_hovered: false, save_hovered: false,
         codes_search: String::new(), codes_version: 0,
         cat_expanded: Vec::new(), cat_menu_open: None, cat_menu_hover: 0,
+        scroll_dragging: false, scroll_drag_start_y: 0.0,
     };
     SETTINGS = Some(win);
     let _ = ShowWindow(hwnd_s, SW_SHOW);
@@ -680,6 +711,25 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 }
             }
 
+            // ── 滚动条 ──
+            let track_l = S_W as f32 - 14.0;
+            let track_t = TITLE_H + 4.0;
+            let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
+            if let Some(b) = mk_brush_(&s.d2d_context, 0.10, 0.10, 0.10, 1.0) {
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: track_l, top: track_t, right: track_l + 6.0, bottom: track_t + track_h } as *const _, &b);
+            }
+            let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
+            if max_scroll > 0.0 {
+                let thumb_h = (track_h - 10.0) * (track_h / (track_h + max_scroll));
+                let thumb_t = track_t + 5.0 + (s.scroll_y / max_scroll) * (track_h - 10.0 - thumb_h);
+                if let Some(b) = mk_brush_(&s.d2d_context, 0.30, 0.30, 0.30, 1.0) {
+                    s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F { left: track_l, top: thumb_t, right: track_l + 6.0, bottom: thumb_t + thumb_h },
+                        radiusX: 3.0, radiusY: 3.0,
+                    } as *const _, &b);
+                }
+            }
+
             let ident = Mtx { _11: 1.0, _12: 0.0, _21: 0.0, _22: 1.0, _31: 0.0, _32: 0.0 };
             s.d2d_context.SetTransform(&ident as *const _ as *const _);
             s.d2d_context.PopAxisAlignedClip();
@@ -747,6 +797,25 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     return LRESULT(0);
                 }
                 if x >= save_l && x <= save_l + 80.0 && y >= bty && y <= bby {
+                    return LRESULT(0);
+                }
+
+                // ── 滚动条拖拽 ──
+                let track_l = S_W as f32 - 14.0;
+                let track_t = TITLE_H + 4.0;
+                let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
+                let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
+                if max_scroll > 0.0 && x >= track_l && x <= track_l + 6.0 && y >= track_t && y <= track_t + track_h {
+                    let thumb_h = (track_h - 10.0) * (track_h / (track_h + max_scroll));
+                    let thumb_t = track_t + 5.0 + (s.scroll_y / max_scroll) * (track_h - 10.0 - thumb_h);
+                    if y >= thumb_t && y <= thumb_t + thumb_h {
+                        s.scroll_dragging = true;
+                        s.scroll_drag_start_y = y;
+                    } else {
+                        let ratio = ((y - track_t - 5.0 - thumb_h / 2.0) / (track_h - 10.0 - thumb_h)).clamp(0.0, 1.0);
+                        s.scroll_y = ratio * max_scroll;
+                        let _ = InvalidateRect(Some(h), None, true);
+                    }
                     return LRESULT(0);
                 }
 
@@ -841,9 +910,25 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     sync_codes_entries(s);
                                     if ci < s.cat_expanded.len() {
                                         s.cat_expanded[ci] = !s.cat_expanded[ci];
+                                        let sm = main_state();
+                                        if !sm.is_null() { unsafe { (*sm).codes_cat_state = s.cat_expanded.clone(); } }
                                         s.codes_version += 1;
                                         let _ = InvalidateRect(Some(h), None, true);
                                     }
+                                }
+                                WidgetCmd::ExpandAll => {
+                                    for e in &mut s.cat_expanded { *e = true; }
+                                    let sm = main_state();
+                                    if !sm.is_null() { unsafe { (*sm).codes_cat_state = s.cat_expanded.clone(); } }
+                                    s.codes_version += 1;
+                                    let _ = InvalidateRect(Some(h), None, true);
+                                }
+                                WidgetCmd::CollapseAll => {
+                                    for e in &mut s.cat_expanded { *e = false; }
+                                    let sm = main_state();
+                                    if !sm.is_null() { unsafe { (*sm).codes_cat_state = s.cat_expanded.clone(); } }
+                                    s.codes_version += 1;
+                                    let _ = InvalidateRect(Some(h), None, true);
                                 }
                                 _ => {}
                             }
@@ -906,6 +991,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let x = (lp.0 as u32 & 0xFFFF) as i32 as f32;
             let y = ((lp.0 as u32 >> 16) & 0xFFFF) as i32 as f32;
             if let Some(s) = &mut SETTINGS {
+                s.scroll_dragging = false;
                 let adj_y = y + s.scroll_y;
                 for w in &mut s.widgets { w.on_mouse_up(x, adj_y); }
                 let _ = InvalidateRect(Some(h), None, true);
@@ -917,6 +1003,19 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let x = (lp.0 as u32 & 0xFFFF) as i32 as f32;
             let y = ((lp.0 as u32 >> 16) & 0xFFFF) as i32 as f32;
             if let Some(s) = &mut SETTINGS {
+                if s.scroll_dragging {
+                    let dy = y - s.scroll_drag_start_y;
+                    s.scroll_drag_start_y = y;
+                    let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
+                    if max_scroll > 0.0 {
+                        let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
+                        let thumb_h = (track_h - 10.0) * (track_h / (track_h + max_scroll));
+                        let move_ratio = dy / (track_h - 10.0 - thumb_h);
+                        s.scroll_y = (s.scroll_y + move_ratio * max_scroll).clamp(0.0, max_scroll);
+                        let _ = InvalidateRect(Some(h), None, true);
+                    }
+                    return LRESULT(0);
+                }
                 let adj_y = y + s.scroll_y;
                 let bw2 = 80.0;
                 let bty = S_H as f32 - BOTTOM_H + 10.0;

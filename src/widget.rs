@@ -20,6 +20,8 @@ pub enum WidgetCmd {
     EntryAdd(usize),
     CatMenu(usize),
     CatToggle(usize),
+    ExpandAll,
+    CollapseAll,
 }
 
 pub trait Widget {
@@ -294,6 +296,7 @@ pub struct TextInput {
     hovered: bool,
     select_all: bool,
     pub center: bool,
+    pub select_on_focus: bool,
     scroll_x: std::cell::Cell<f32>,
     mouse_down: bool,
     sel_start: Option<usize>,
@@ -302,10 +305,10 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0 }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0 }
     }
     pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0 }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0 }
     }
     fn sel_range(&self) -> Option<(usize, usize)> {
         self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
@@ -360,7 +363,7 @@ impl Widget for TextInput {
         self.sel_start = None;
         if !self.focused {
             self.focused = true;
-            self.select_all = true;
+            self.select_all = self.select_on_focus;
         } else {
             self.select_all = false;
         }

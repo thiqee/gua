@@ -157,6 +157,7 @@ fn main() -> Result<()> {
             config_mtime: None,
             panel_ratio_x,
             panel_ratio_y,
+            codes_cat_state: Vec::new(),
             mod_keys,
             hotkey_vk,
             blacklist,

@@ -432,6 +432,8 @@ pub struct AppState {
     pub panel_ratio_x: f32,
     /// 面板垂直位置比例 0.0~1.0，由 _panel_position_y 配置计算
     pub panel_ratio_y: f32,
+    /// 识别码分类展开/折叠状态
+    pub codes_cat_state: Vec<bool>,
     /// 当前热键修饰键位掩码，由 _hotkey 配置解析
     pub mod_keys: u32,
     /// 当前热键虚拟键码，由 _hotkey 配置解析
