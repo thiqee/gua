@@ -27,6 +27,7 @@ pub trait Widget {
     fn focused(&self) -> bool { false }
     fn set_focused(&mut self, val: bool);
     fn set_text(&mut self, _text: &str) {}
+    fn text(&self) -> &str { "" }
     fn captures_hotkey(&self) -> bool { false }
     fn on_mouse_wheel(&mut self, _delta: f32) -> bool { false }
     fn draw_overlay(&self, _res: &D2DRes) {}
@@ -335,6 +336,7 @@ impl Widget for TextInput {
         if val { self.cursor_pos = self.text.len(); } else { self.select_all = false; }
     }
     fn focused(&self) -> bool { self.focused }
+    fn text(&self) -> &str { &self.text }
 
     fn on_key_down(&mut self, vk: u32) -> bool {
         if self.select_all {
