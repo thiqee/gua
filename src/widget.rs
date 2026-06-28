@@ -130,7 +130,7 @@ impl Widget for Label {
     fn on_mouse_leave(&mut self) {}
     fn set_focused(&mut self, _val: bool) {}
     fn draw(&self, res: &D2DRes) {
-        if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+        if let Some(tf) = tf_vcenter(&res.dwrite, 14.0) {
             if let Some(b) = mk_brush(&res.d2d, 0.55, 0.55, 0.55, 1.0) {
                 draw_text(&res.d2d, &self.text, &tf, &self.r, &b);
             }
@@ -156,7 +156,7 @@ impl Widget for GroupHeader {
     fn set_focused(&mut self, _val: bool) {}
     fn draw(&self, res: &D2DRes) {
         let text_r = D2D_RECT_F { left: self.r.left, top: self.r.top, right: self.r.right, bottom: self.r.top + 20.0 };
-        if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+        if let Some(tf) = tf_vcenter(&res.dwrite, 14.0) {
             if let Some(b) = mk_brush(&res.d2d, 0.85, 0.85, 0.85, 1.0) {
                 draw_text(&res.d2d, &self.text, &tf, &text_r, &b);
             }
@@ -275,7 +275,7 @@ impl Widget for TextButton {
         if let Some(b) = mk_brush(&res.d2d, ar, ag, ab, 1.0) {
             unsafe { res.d2d.FillRoundedRectangle(&rr as *const _, &b); }
         }
-        if let Some(tf) = tf_center(&res.dwrite, 13.0) {
+        if let Some(tf) = tf_center(&res.dwrite, 14.0) {
             if let Some(b) = mk_brush(&res.d2d, 1.0, 1.0, 1.0, 1.0) {
                 draw_text(&res.d2d, &self.text, &tf, &self.r, &b);
             }
@@ -294,21 +294,60 @@ pub struct TextInput {
     hovered: bool,
     select_all: bool,
     pub center: bool,
+    scroll_x: std::cell::Cell<f32>,
+    mouse_down: bool,
+    sel_start: Option<usize>,
+    sel_end: usize,
 }
 
 impl TextInput {
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0 }
     }
     pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0 }
+    }
+    fn sel_range(&self) -> Option<(usize, usize)> {
+        self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
+    }
+    fn replace_sel(&mut self, new: &str) {
+        if let Some((lo, hi)) = self.sel_range() {
+            self.text.replace_range(lo..hi, new);
+            self.cursor_pos = lo + new.len();
+            self.sel_start = None;
+        }
     }
 }
 
 impl Widget for TextInput {
     fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
-    fn on_mouse_move(&mut self, x: f32, y: f32) { self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom; }
+    fn on_mouse_move(&mut self, x: f32, y: f32) {
+        self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom;
+        if self.mouse_down && self.focused {
+            let rel = x - (self.r.left + 8.0 + self.scroll_x.get());
+            let est = 7.5; // approximate char width
+            let pos = (rel.max(0.0) / est) as usize;
+            self.sel_end = pos.min(self.text.len());
+        }
+    }
     fn on_mouse_leave(&mut self) { self.hovered = false; }
+
+    fn on_mouse_down(&mut self, x: f32, y: f32) {
+        if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
+            self.mouse_down = true;
+            self.sel_start = Some(self.cursor_pos);
+            self.sel_end = self.cursor_pos;
+        }
+    }
+
+    fn on_mouse_up(&mut self, _x: f32, _y: f32) {
+        if self.mouse_down {
+            self.mouse_down = false;
+            if let Some(start) = self.sel_start {
+                if start == self.sel_end { self.sel_start = None; }
+            }
+        }
+    }
 
     fn on_click(&mut self, x: f32, y: f32) -> bool {
         if !(x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom) { return false; }
@@ -318,13 +357,14 @@ impl Widget for TextInput {
 
     fn on_click_with(&mut self, x: f32, y: f32, res: &D2DRes) -> bool {
         if !(x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom) { return false; }
+        self.sel_start = None;
         if !self.focused {
             self.focused = true;
             self.select_all = true;
         } else {
             self.select_all = false;
         }
-        if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+        if let Some(tf) = make_tf(&res.dwrite, 14.0) {
             let box_w = self.r.right - self.r.left;
             if self.center {
                 let tw = text_width(&res.dwrite, &tf, &self.text);
@@ -333,7 +373,7 @@ impl Widget for TextInput {
                 self.cursor_pos = cursor_from_x(&res.dwrite, &tf, &self.text, rel.max(0.0), box_w);
             } else {
                 let rel = x - (self.r.left + 8.0);
-                self.cursor_pos = cursor_from_x(&res.dwrite, &tf, &self.text, rel.max(0.0), box_w - 16.0);
+                self.cursor_pos = cursor_from_x(&res.dwrite, &tf, &self.text, rel.max(0.0), 10000.0);
             }
         } else {
             self.cursor_pos = self.text.len();
@@ -356,21 +396,30 @@ impl Widget for TextInput {
         }
         match vk {
             0x08 => {
-                if self.cursor_pos > 0 {
+                if let Some((lo, hi)) = self.sel_range() {
+                    self.text.replace_range(lo..hi, "");
+                    self.cursor_pos = lo;
+                    self.sel_start = None;
+                } else if self.cursor_pos > 0 {
                     let prev = self.text.floor_char_boundary(self.cursor_pos - 1);
-                    self.text.replace_range(prev..self.cursor_pos, ""); self.cursor_pos = prev;
+                    self.text.replace_range(prev..self.cursor_pos, "");
+                    self.cursor_pos = prev;
                 }
                 true
             }
             0x2E => {
-                if self.cursor_pos < self.text.len() {
+                if let Some((lo, hi)) = self.sel_range() {
+                    self.text.replace_range(lo..hi, "");
+                    self.cursor_pos = lo;
+                    self.sel_start = None;
+                } else if self.cursor_pos < self.text.len() {
                     let next = self.text.ceil_char_boundary(self.cursor_pos + 1);
                     self.text.replace_range(self.cursor_pos..next, "");
                 }
                 true
             }
-            0x25 => { if self.cursor_pos > 0 { self.cursor_pos = self.text.floor_char_boundary(self.cursor_pos - 1); } true }
-            0x27 => { if self.cursor_pos < self.text.len() { self.cursor_pos = self.text.ceil_char_boundary(self.cursor_pos + 1); } true }
+            0x25 => { self.sel_start = None; if self.cursor_pos > 0 { self.cursor_pos = self.text.floor_char_boundary(self.cursor_pos - 1); } true }
+            0x27 => { self.sel_start = None; if self.cursor_pos < self.text.len() { self.cursor_pos = self.text.ceil_char_boundary(self.cursor_pos + 1); } true }
             _ => false,
         }
     }
@@ -382,7 +431,15 @@ impl Widget for TextInput {
             self.select_all = false;
         }
         if let Some(c) = char::from_u32(ch) {
-            if !c.is_control() { self.text.insert(self.cursor_pos, c); self.cursor_pos += c.len_utf8(); return true; }
+            if !c.is_control() {
+                if self.sel_start.is_some() {
+                    self.replace_sel(&c.to_string());
+                } else {
+                    self.text.insert(self.cursor_pos, c);
+                    self.cursor_pos += c.len_utf8();
+                }
+                return true;
+            }
         }
         false
     }
@@ -398,12 +455,13 @@ impl Widget for TextInput {
             unsafe { let _ = res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
 
-        let text_r = D2D_RECT_F { left: self.r.left + 8.0, top: self.r.top, right: self.r.right - 8.0, bottom: self.r.bottom };
+        let sx = self.scroll_x.get();
+        let text_r = D2D_RECT_F { left: self.r.left + 8.0 - sx, top: self.r.top, right: self.r.right - 8.0 - sx, bottom: self.r.bottom };
         let clip_r = D2D_RECT_F { left: self.r.left + 6.0, top: self.r.top, right: self.r.right - 6.0, bottom: self.r.bottom };
         unsafe { res.d2d.PushAxisAlignedClip(&clip_r as *const _, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE); }
 
         if self.focused && self.select_all {
-            if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+            if let Some(tf) = make_tf(&res.dwrite, 14.0) {
                 let tw = text_width(&res.dwrite, &tf, &self.text);
                 let box_w = self.r.right - self.r.left;
                 let (hl_l, hl_w) = if self.center {
@@ -416,13 +474,13 @@ impl Widget for TextInput {
                     unsafe { res.d2d.FillRectangle(&D2D_RECT_F { left: hl_l.max(self.r.left + 4.0), top: self.r.top + 2.0, right: (hl_l + hl_w + 4.0).min(self.r.right - 4.0), bottom: self.r.bottom - 2.0 } as *const _, &b); }
                 }
                 if self.center {
-                    if let Some(ctf) = tf_center(&res.dwrite, 13.0) {
+                    if let Some(ctf) = tf_center_nowrap(&res.dwrite, 14.0) {
                         if let Some(b) = mk_brush(&res.d2d, 1.0, 1.0, 1.0, 1.0) {
                             draw_text(&res.d2d, &self.text, &ctf, &D2D_RECT_F { left: self.r.left, top: self.r.top, right: self.r.right, bottom: self.r.bottom }, &b);
                         }
                     }
                 } else {
-                    if let Some(vtf) = tf_vcenter(&res.dwrite, 13.0) {
+                    if let Some(vtf) = tf_vcenter_nowrap(&res.dwrite, 14.0) {
                         if let Some(b) = mk_brush(&res.d2d, 1.0, 1.0, 1.0, 1.0) {
                             draw_text(&res.d2d, &self.text, &vtf, &text_r, &b);
                         }
@@ -430,34 +488,63 @@ impl Widget for TextInput {
                 }
             }
         } else if self.text.is_empty() && !self.focused && !self.placeholder.is_empty() {
-            if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+            if let Some(tf) = tf_vcenter_nowrap(&res.dwrite, 14.0) {
                 if let Some(b) = mk_brush(&res.d2d, 0.35, 0.35, 0.35, 1.0) { draw_text(&res.d2d, &self.placeholder, &tf, &text_r, &b); }
             }
         } else if self.center {
-            if let Some(tf) = tf_center(&res.dwrite, 13.0) {
+            if let Some(tf) = tf_center_nowrap(&res.dwrite, 14.0) {
                 let full_r = D2D_RECT_F { left: self.r.left, top: self.r.top, right: self.r.right, bottom: self.r.bottom };
                 if let Some(b) = mk_brush(&res.d2d, 0.85, 0.85, 0.85, 1.0) { draw_text(&res.d2d, &self.text, &tf, &full_r, &b); }
             }
         } else {
-            if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+            if let Some(tf) = tf_vcenter_nowrap(&res.dwrite, 14.0) {
                 if let Some(b) = mk_brush(&res.d2d, 0.85, 0.85, 0.85, 1.0) { draw_text(&res.d2d, &self.text, &tf, &text_r, &b); }
             }
         }
 
+        // Draw selection highlight
+        if let Some((lo, hi)) = self.sel_range() {
+            if lo != hi {
+                if let Some(tf) = make_tf(&res.dwrite, 14.0) {
+                    let before = text_width(&res.dwrite, &tf, &self.text[..lo]);
+                    let sel_w = text_width(&res.dwrite, &tf, &self.text[lo..hi]);
+                    let sx2 = self.scroll_x.get();
+                    let sel_l = if self.center {
+                        let tw = text_width(&res.dwrite, &tf, &self.text);
+                        let box_w = self.r.right - self.r.left;
+                        self.r.left + (box_w - tw) / 2.0 + before - sx2
+                    } else {
+                        self.r.left + 8.0 + before - sx2
+                    };
+                    if let Some(b) = mk_brush(&res.d2d, 0.29, 0.53, 0.80, 0.30) {
+                        unsafe { res.d2d.FillRectangle(&D2D_RECT_F { left: sel_l, top: self.r.top + 2.0, right: sel_l + sel_w, bottom: self.r.bottom - 2.0 } as *const _, &b); }
+                    }
+                }
+            }
+        }
+
         if self.focused && !self.select_all {
-            if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+            if let Some(tf) = make_tf(&res.dwrite, 14.0) {
                 let tw = text_width(&res.dwrite, &tf, &self.text[..self.cursor_pos]);
                 let box_w = self.r.right - self.r.left;
                 let cx = if self.center {
                     let total_w = text_width(&res.dwrite, &tf, &self.text);
                     self.r.left + (box_w - total_w) / 2.0 + tw
                 } else {
-                    self.r.left + 8.0 + tw
+                    self.r.left + 8.0 + tw - sx
                 };
                 let cy = self.r.top + 4.0;
                 let ch = self.r.bottom - self.r.top - 8.0;
                 if let Some(b) = mk_brush(&res.d2d, 0.8, 0.8, 0.8, 1.0) {
                     unsafe { res.d2d.FillRectangle(&D2D_RECT_F { left: cx, top: cy, right: cx + 1.5, bottom: cy + ch } as *const _, &b); }
+                }
+                // Auto-scroll: keep cursor visible
+                let sx = self.scroll_x.get();
+                let box_w2 = self.r.right - self.r.left - 16.0;
+                if self.cursor_pos > 0 {
+                    let before = text_width(&res.dwrite, &tf, &self.text[..self.cursor_pos]);
+                    if before < sx { self.scroll_x.set(before); }
+                    else if before - sx > box_w2 { self.scroll_x.set(before - box_w2); }
                 }
             }
         }
@@ -493,7 +580,7 @@ impl Widget for IconButton {
     fn draw(&self, res: &D2DRes) {
         let c = if self.hovered { 0.85 } else { 0.55 };
         if let Some(b) = mk_brush(&res.d2d, c, c, c, 1.0) {
-            if let Some(tf) = tf_vcenter(&res.dwrite, 12.0) {
+            if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
                 draw_text(&res.d2d, &self.icon, &tf, &self.r, &b);
             }
         }
@@ -528,7 +615,7 @@ impl Widget for ClickLabel {
     fn draw(&self, res: &D2DRes) {
         let c = if self.hovered { 0.85 } else { 0.55 };
         if let Some(b) = mk_brush(&res.d2d, c, c, c, 1.0) {
-            if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+            if let Some(tf) = tf_vcenter(&res.dwrite, 14.0) {
                 draw_text(&res.d2d, &self.text, &tf, &self.r, &b);
             }
         }
@@ -570,7 +657,7 @@ impl Widget for MultilineTextInput {
     fn on_click_with(&mut self, x: f32, y: f32, res: &D2DRes) -> bool {
         if !(x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom) { return false; }
         self.focused = true;
-        if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+        if let Some(tf) = make_tf(&res.dwrite, 14.0) {
             let box_w = self.r.right - self.r.left - 12.0;
             let sy = self.scroll_y.get();
             let rel_x = x - (self.r.left + 4.0);
@@ -653,7 +740,7 @@ impl Widget for MultilineTextInput {
         let box_w = self.r.right - self.r.left - 12.0;
         let vis_h = self.r.bottom - self.r.top - 4.0;
 
-        if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+        if let Some(tf) = make_tf(&res.dwrite, 14.0) {
             // measure content height
             let ws: Vec<u16> = self.text.encode_utf16().collect();
             let content_h = if let Ok(layout) = unsafe { res.dwrite.CreateTextLayout(&ws, &tf, box_w.max(1.0), 10000.0) } {
@@ -721,6 +808,16 @@ impl Widget for MultilineTextInput {
 
 // ── Dropdown ──
 
+fn tf_center_nowrap(dwrite: &IDWriteFactory, sz: f32) -> Option<IDWriteTextFormat> {
+    let tf = make_tf(dwrite, sz)?;
+    unsafe {
+        let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    }
+    Some(tf)
+}
+
 fn tf_vcenter_nowrap(dwrite: &IDWriteFactory, sz: f32) -> Option<IDWriteTextFormat> {
     let tf = make_tf(dwrite, sz)?;
     unsafe {
@@ -763,7 +860,7 @@ impl Dropdown {
     fn calc_popup_w(&mut self, res: &D2DRes) {
         let base_w = self.r.right - self.r.left;
         let mut max_w = base_w;
-        if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+        if let Some(tf) = make_tf(&res.dwrite, 14.0) {
             for opt in &self.options {
                 let tw = text_width(&res.dwrite, &tf, opt);
                 let needed = tw + 48.0;
@@ -858,7 +955,7 @@ impl Widget for Dropdown {
         let clip_r = D2D_RECT_F { left: self.r.left + 6.0, top: self.r.top, right: self.r.right - 30.0, bottom: self.r.bottom };
         unsafe { res.d2d.PushAxisAlignedClip(&clip_r as *const _, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE); }
 
-        if let Some(tf) = tf_vcenter_nowrap(&res.dwrite, 13.0) {
+        if let Some(tf) = tf_vcenter_nowrap(&res.dwrite, 14.0) {
             if let Some(b) = mk_brush(&res.d2d, 0.85, 0.85, 0.85, 1.0) {
                 draw_text(&res.d2d, display, &tf, &text_r, &b);
             }
@@ -866,7 +963,7 @@ impl Widget for Dropdown {
         unsafe { res.d2d.PopAxisAlignedClip(); }
 
         let arr_r = D2D_RECT_F { left: self.r.right - 24.0, top: self.r.top, right: self.r.right - 6.0, bottom: self.r.bottom };
-        if let Some(tf) = tf_vcenter(&res.dwrite, 11.0) {
+        if let Some(tf) = tf_vcenter(&res.dwrite, 12.0) {
             if let Some(b) = mk_brush(&res.d2d, 0.29, 0.53, 0.80, 1.0) {
                 draw_text(&res.d2d, arrow, &tf, &arr_r, &b);
             }
@@ -902,7 +999,7 @@ impl Widget for Dropdown {
             }
 
             let text_item_r = D2D_RECT_F { left: item_r.left + 8.0, top: item_r.top, right: item_r.right - 24.0, bottom: item_r.bottom };
-            if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
+            if let Some(tf) = tf_vcenter(&res.dwrite, 14.0) {
                 if let Some(b) = mk_brush(&res.d2d, 0.75, 0.75, 0.75, 1.0) {
                     draw_text(&res.d2d, &self.options[i], &tf, &text_item_r, &b);
                 }
@@ -910,7 +1007,7 @@ impl Widget for Dropdown {
 
             if i == self.selected {
                 let check_r = D2D_RECT_F { left: item_r.right - 20.0, top: item_r.top, right: item_r.right - 4.0, bottom: item_r.bottom };
-                if let Some(tf) = tf_vcenter(&res.dwrite, 12.0) {
+                if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
                     if let Some(b) = mk_brush(&res.d2d, 0.29, 0.53, 0.80, 1.0) {
                         draw_text(&res.d2d, "✓", &tf, &check_r, &b);
                     }
@@ -967,7 +1064,7 @@ impl Widget for KeyBindingInput {
         unsafe { res.d2d.PushAxisAlignedClip(&clip_r as *const _, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE); }
 
         let tc = if self.focused { (0.45, 0.45, 0.45) } else { (0.85, 0.85, 0.85) };
-        if let Some(tf) = tf_center(&res.dwrite, 13.0) {
+        if let Some(tf) = tf_center(&res.dwrite, 14.0) {
             if let Some(b) = mk_brush(&res.d2d, tc.0, tc.1, tc.2, 1.0) {
                 draw_text(&res.d2d, &display, &tf, &text_r, &b);
             }
@@ -975,7 +1072,7 @@ impl Widget for KeyBindingInput {
         unsafe { res.d2d.PopAxisAlignedClip(); }
 
         let hint_r = D2D_RECT_F { left: self.r.right - 26.0, top: self.r.top, right: self.r.right - 6.0, bottom: self.r.bottom };
-        if let Some(tf) = tf_vcenter(&res.dwrite, 12.0) {
+        if let Some(tf) = tf_vcenter(&res.dwrite, 13.0) {
             if let Some(b) = mk_brush(&res.d2d, if self.focused { 0.29 } else { 0.35 }, 0.53, 0.80, 1.0) {
                 draw_text(&res.d2d, "🖊", &tf, &hint_r, &b);
             }

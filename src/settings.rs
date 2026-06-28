@@ -29,7 +29,7 @@ extern "system" {
 }
 
 const S_W: i32 = 780;
-const S_H: i32 = 540;
+const S_H: i32 = 640;
 const TITLE_H: f32 = 30.0;
 const BOTTOM_H: f32 = 52.0;
 const SIDEBAR_W: f32 = 140.0;
@@ -294,8 +294,8 @@ unsafe fn build_codes_tab(
     }
 
     let row_h = 28.0;
-    let col_key_w = 110.0;
-    let col_val_w = 190.0;
+    let col_key_w = 90.0;
+    let col_val_w = 230.0;
     let del_w = 24.0;
     let col_desc_w = inner_w - col_key_w - col_val_w - del_w - 20.0;
     let menu_btn_w = 44.0;
@@ -304,15 +304,21 @@ unsafe fn build_codes_tab(
         let ct = y;
 
         // Category header: [▼ ▲] + name + [⋮]
-        let arr = if ci < cat_expanded.len() && cat_expanded[ci] { "▲" } else { "▼" };
-        let mut arr_lbl = Label::new(arr);
+        let arr = if ci < cat_expanded.len() && cat_expanded[ci] { "▼" } else { "▶" };
+        let mut arr_lbl = ClickLabel::new(arr);
+        arr_lbl.cmd = WidgetCmd::CatToggle(ci);
         arr_lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 20.0, bottom: y + row_h });
         w.push(Box::new(arr_lbl));
 
         let mut name_lbl = ClickLabel::new(cat_name);
         name_lbl.cmd = WidgetCmd::CatToggle(ci);
-        name_lbl.set_bounds(D2D_RECT_F { left: inner_l + 24.0, top: y, right: inner_l + inner_w - menu_btn_w - 4.0, bottom: y + row_h });
+        name_lbl.set_bounds(D2D_RECT_F { left: inner_l + 24.0, top: y, right: inner_l + inner_w - menu_btn_w - 104.0, bottom: y + row_h });
         w.push(Box::new(name_lbl));
+
+        let mut add_btn = IconButton::new("＋添加识别码");
+        add_btn.cmd = WidgetCmd::EntryAdd(ci);
+        add_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w - 100.0, top: y, right: inner_l + inner_w - menu_btn_w - 4.0, bottom: y + row_h });
+        w.push(Box::new(add_btn));
 
         let mut menu_btn = IconButton::new("⋮");
         menu_btn.cmd = WidgetCmd::CatMenu(ci);
@@ -358,12 +364,6 @@ unsafe fn build_codes_tab(
                 y += row_h + 4.0;
             }
 
-            // ＋ add button on the right
-            let mut add_btn = IconButton::new("＋ 添加识别码");
-            add_btn.cmd = WidgetCmd::EntryAdd(ci);
-            add_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 110.0, top: y, right: inner_l + inner_w, bottom: y + row_h });
-            w.push(Box::new(add_btn));
-            y += row_h + 4.0;
         }
 
         if let Some(last) = cards.last_mut() { last.bottom = y; }
@@ -551,14 +551,16 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
             if need_rebuild {
                 if s.cat == 2 { sync_codes_entries(s); }
+                let was_cat_switch = s.sel_cat != s.cat;
                 s.sel_cat = s.cat;
-                s.scroll_y = 0.0;
+                if was_cat_switch { s.scroll_y = 0.0; }
                 s.focused_idx = None;
                 set_capturing(s, false);
                 s.mod_held = [false; 4];
                 if s.cat == 2 {
                     let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded);
                     s.widgets = widgets;
+                    s.focused_idx = Some(0);
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
                 }
@@ -580,7 +582,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
             if let Some(ref dwf) = dwf {
                 let f = to_w("Microsoft YaHei"); let l = to_w("en-us");
-                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l.as_ptr())) {
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(l.as_ptr())) {
                     let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                     if let Some(b) = mk_brush_(&s.d2d_context, 0.45, 0.45, 0.45, 1.0) {
                         s.d2d_context.DrawText(&to_w("Gua 设置"), &tf, &D2D_RECT_F { left: 16.0, top: 0.0, right: 120.0, bottom: TITLE_H } as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
@@ -612,7 +614,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if let Some(b) = mk_brush_(&s.d2d_context, rr, gg, bb, 1.0) {
                     if let Some(ref dwf) = dwf {
                         let f2 = to_w("Microsoft YaHei"); let l2 = to_w("en-us");
-                        if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f2.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(l2.as_ptr())) {
+                        if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f2.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0, PCWSTR(l2.as_ptr())) {
                             let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                             let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                             s.d2d_context.DrawText(&to_w(name), &tf, &btn as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
@@ -644,7 +646,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             if let Some(ci) = s.cat_menu_open {
                 if ci < s.cards.len() {
                     let card = s.cards[ci];
-                    let popup_l = (card.right + card.left) / 2.0 - 60.0;
+                    let popup_l = card.right - 136.0;
                     let popup_top = card.top + 34.0;
                     let popup_r = D2D_RECT_F { left: popup_l, top: popup_top, right: popup_l + 120.0, bottom: popup_top + 64.0 };
                     let rr = D2D1_ROUNDED_RECT { rect: popup_r, radiusX: 6.0, radiusY: 6.0 };
@@ -666,7 +668,8 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         }
                         if let Some(ref dwf) = dwf {
                             let f = to_w("Microsoft YaHei"); let l = to_w("en-us");
-                            if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l.as_ptr())) {
+                            if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(l.as_ptr())) {
+                                let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                                 let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                                 if let Some(b) = mk_brush_(&s.d2d_context, 0.80, 0.80, 0.80, 1.0) {
                                     s.d2d_context.DrawText(&to_w(label), &tf, &item_r as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
@@ -785,6 +788,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         }
                     }
                     if handled {
+                        if handled_idx < s.widgets.len() { s.widgets[handled_idx].on_mouse_down(x, adj_y); }
                         set_capturing(s, captures);
                         if s.cat == 2 && handled_idx < s.widgets.len() {
                             match s.widgets[handled_idx].cmd() {
@@ -793,8 +797,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     let s_main = main_state();
                                     if !s_main.is_null() && global_idx < (*s_main).entries.len() {
                                         (*s_main).entries.remove(global_idx);
-                                        s.codes_version = 1;
-                                        s.sel_cat = 99;
+                                        s.codes_version += 1;
                                     }
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
@@ -821,8 +824,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                             category: Some(cat_name),
                                             description: None,
                                         });
-                                        s.codes_version = 1;
-                                        s.sel_cat = 99;
+                                        s.codes_version += 1;
                                     }
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
@@ -839,7 +841,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     sync_codes_entries(s);
                                     if ci < s.cat_expanded.len() {
                                         s.cat_expanded[ci] = !s.cat_expanded[ci];
-                                        s.sel_cat = 99;
+                                        s.codes_version += 1;
                                         let _ = InvalidateRect(Some(h), None, true);
                                     }
                                 }
@@ -848,44 +850,49 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         }
                     }
                     if !handled {
-                        if s.cat_menu_open.is_some() {
-                            let adj_y = y + s.scroll_y;
-                            let popup_l = CONTENT_L + CONTENT_PAD + (S_W as f32 - CONTENT_L - CONTENT_PAD - CONTENT_PAD) / 2.0 - 60.0;
-                            let popup_t = s.cards.first().map(|c| c.top + 34.0).unwrap_or(30.0);
-                            let on_menu = adj_y >= popup_t + 4.0 && adj_y < popup_t + 68.0 && x >= popup_l && x < popup_l + 120.0;
-                            if on_menu {
-                                let item_idx = ((adj_y - popup_t - 4.0) / 28.0) as usize;
-                                let ci = s.cat_menu_open.unwrap_or(0);
-                                s.cat_menu_open = None;
-                                if item_idx == 1 && s.cat == 2 {
-                                    sync_codes_entries(s);
-                                    let s_main = main_state();
-                                    if !s_main.is_null() {
-                                        let state = &mut *s_main;
-                                        let cat_name = {
-                                            let mut m: Vec<String> = Vec::new();
-                                            for e in &state.entries {
-                                                if e.key.starts_with('_') { continue; }
-                                                let n = e.category.as_deref().unwrap_or("未分类").to_string();
-                                                if !m.contains(&n) { m.push(n); }
-                                            }
-                                            if let Some(p) = m.iter().position(|n| n == "未分类") {
-                                                let u = m.remove(p); m.push(u);
-                                            }
-                                            m.get(ci).cloned().unwrap_or_default()
-                                        };
-                                        state.entries.retain(|e| {
-                                            if e.key.starts_with('_') { return true; }
-                                            e.category.as_deref().unwrap_or("未分类") != cat_name
-                                        });
-                                        s.codes_version = 1;
-                                        s.sel_cat = 99;
+                        if let Some(ci) = s.cat_menu_open {
+                            if ci < s.cards.len() {
+                                let card = s.cards[ci];
+                                let adj_y = y + s.scroll_y;
+                                let popup_l = card.right - 136.0;
+                                let popup_t = card.top + 34.0;
+                                let on_menu = adj_y >= popup_t + 4.0 && adj_y < popup_t + 68.0 && x >= popup_l && x < popup_l + 120.0;
+                                if on_menu {
+                                    let item_idx = ((adj_y - popup_t - 4.0) / 28.0) as usize;
+                                    let ci = s.cat_menu_open.unwrap_or(0);
+                                    s.cat_menu_open = None;
+                                    if item_idx == 1 && s.cat == 2 {
+                                        sync_codes_entries(s);
+                                        let s_main = main_state();
+                                        if !s_main.is_null() {
+                                            let state = &mut *s_main;
+                                            let cat_name = {
+                                                let mut m: Vec<String> = Vec::new();
+                                                for e in &state.entries {
+                                                    if e.key.starts_with('_') { continue; }
+                                                    let n = e.category.as_deref().unwrap_or("未分类").to_string();
+                                                    if !m.contains(&n) { m.push(n); }
+                                                }
+                                                if let Some(p) = m.iter().position(|n| n == "未分类") {
+                                                    let u = m.remove(p); m.push(u);
+                                                }
+                                                m.get(ci).cloned().unwrap_or_default()
+                                            };
+                                            state.entries.retain(|e| {
+                                                if e.key.starts_with('_') { return true; }
+                                                e.category.as_deref().unwrap_or("未分类") != cat_name
+                                            });
+                                            s.codes_version += 1;
+                                        }
                                     }
+                                } else {
+                                    s.cat_menu_open = None;
                                 }
+                                let _ = InvalidateRect(Some(h), None, true);
                             } else {
                                 s.cat_menu_open = None;
+                                let _ = InvalidateRect(Some(h), None, true);
                             }
-                            let _ = InvalidateRect(Some(h), None, true);
                         } else {
                             clear_focus(s);
                         }
