@@ -22,6 +22,16 @@ extern "system" {
     fn GetAsyncKeyState(vKey: i32) -> i16;
 }
 
+#[link(name = "user32")]
+extern "system" {
+    fn SetCapture(hWnd: HWND) -> HWND;
+    fn ReleaseCapture() -> BOOL;
+    fn ImmGetContext(hwnd: HWND) -> isize;
+    fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
+    fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
+    fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
+}
+
 #[link(name = "gdi32")]
 extern "system" {
     fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> HRGN;
@@ -62,6 +72,7 @@ pub struct SettingsWin {
     cat_menu_hover: usize,
     scroll_dragging: bool,
     scroll_drag_start_y: f32,
+    composing: String,
 }
 
 #[allow(static_mut_refs)]
@@ -113,8 +124,8 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 开关设置 ──
-            card_hdr("开关设置", &mut w, &mut y, cx, card_r);
+            // ── 体验设置 ──
+            card_hdr("体验设置", &mut w, &mut y, cx, card_r);
             let ct = y;
             for (i, (label, checked)) in [("失去焦点自动隐藏", true), ("模糊匹配", true), ("拼音搜索", true)].iter().enumerate() {
                 let row_y = y + 10.0 + i as f32 * 38.0;
@@ -129,19 +140,23 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 文本设置 ──
-            card_hdr("文本设置", &mut w, &mut y, cx, card_r);
+            // ── 黑名单程序 ──
+            card_hdr("黑名单程序", &mut w, &mut y, cx, card_r);
             let ct = y;
-            for (i, (label, val)) in [("黑名单程序", "notepad.exe, calc.exe"), ("多音字追加读音", "茄=qie, 了=le")].iter().enumerate() {
-                let row_y = y + 10.0 + i as f32 * 130.0;
-                let mut lbl = Label::new(label);
-                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y + 20.0, right: inner_l + wide_l - 8.0, bottom: row_y + 44.0 });
-                w.push(Box::new(lbl));
-                let mut inp = MultilineTextInput::new(val);
-                inp.set_bounds(D2D_RECT_F { left: inner_l + wide_l, top: row_y + 20.0, right: inner_l + inner_w, bottom: row_y + 120.0 });
-                w.push(Box::new(inp));
-            }
-            y += 10.0 + 2.0 * 130.0 + 12.0;
+            let mut bl_inp = MultilineTextInput::new("notepad.exe, calc.exe");
+            bl_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 110.0 });
+            w.push(Box::new(bl_inp));
+            y += 10.0 + 100.0 + 12.0;
+            card_bg(cards, &mut y, card_l, card_r, ct);
+            y += 12.0;
+
+            // ── 多音字追加读音 ──
+            card_hdr("多音字追加读音", &mut w, &mut y, cx, card_r);
+            let ct = y;
+            let mut py_inp = MultilineTextInput::new("茄=qie, 了=le");
+            py_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 110.0 });
+            w.push(Box::new(py_inp));
+            y += 10.0 + 100.0 + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
         }
@@ -178,7 +193,7 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
                 opts
             };
             let row_y0 = y + 10.0;
-            let mut lbl0 = Label::new("字体名称");
+            let mut lbl0 = Label::new("字体选择");
             lbl0.set_bounds(D2D_RECT_F { left: inner_l, top: row_y0, right: inner_l + inp_l - 8.0, bottom: row_y0 + 28.0 });
             w.push(Box::new(lbl0));
             let mut dd = Dropdown::new(&font_options, &current_font);
@@ -201,7 +216,7 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
             // ── 布局 ──
             card_hdr("布局", &mut w, &mut y, cx, card_r);
             let ct = y;
-            for (i, (label, val)) in [("透明度", "255"), ("圆角大小", "12"), ("水平位置 (%)", "50"), ("垂直位置 (%)", "40"), ("宽度", "500"), ("最多条目", "8")].iter().enumerate() {
+            for (i, (label, val)) in [("透明度", "255"), ("圆角大小", "12"), ("水平位置 (%)", "50"), ("垂直位置 (%)", "40"), ("宽度", "500"), ("最大显示限制", "8")].iter().enumerate() {
                 let row_y = y + 10.0 + i as f32 * 38.0;
                 let mut lbl = Label::new(label);
                 lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
@@ -263,20 +278,25 @@ unsafe fn build_codes_tab(
     let mut w: Vec<Box<dyn Widget>> = Vec::new();
     let mut y = TITLE_H + CONTENT_PAD;
 
-    // Search box
+    // Search box + expand/collapse all buttons
+    let mut lbl_search = Label::new("搜索：");
+    lbl_search.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 50.0, bottom: y + 28.0 });
+    w.push(Box::new(lbl_search));
     let mut search_inp = TextInput::new(search);
     search_inp.select_on_focus = false;
-    search_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w - 120.0, bottom: y + 28.0 });
+    search_inp.set_bounds(D2D_RECT_F { left: inner_l + 54.0, top: y, right: inner_l + inner_w - 170.0, bottom: y + 28.0 });
     w.push(Box::new(search_inp));
 
-    let mut exp_all = IconButton::new("▽全部展开");
+    let mut exp_all = IconButton::new("全部展开");
+    exp_all.bordered = true;
     exp_all.cmd = WidgetCmd::ExpandAll;
-    exp_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 116.0, top: y, right: inner_l + inner_w - 56.0, bottom: y + 28.0 });
+    exp_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 166.0, top: y, right: inner_l + inner_w - 84.0, bottom: y + 28.0 });
     w.push(Box::new(exp_all));
 
-    let mut col_all = IconButton::new("▷全部折叠");
+    let mut col_all = IconButton::new("全部折叠");
+    col_all.bordered = true;
     col_all.cmd = WidgetCmd::CollapseAll;
-    col_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 52.0, top: y, right: inner_l + inner_w, bottom: y + 28.0 });
+    col_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 80.0, top: y, right: inner_l + inner_w, bottom: y + 28.0 });
     w.push(Box::new(col_all));
     y += 42.0;
 
@@ -345,7 +365,7 @@ unsafe fn build_codes_tab(
 
         cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: y });
 
-        if ci < cat_expanded.len() && cat_expanded[ci] {
+        if ci < cat_expanded.len() && (cat_expanded[ci] || search_active) {
             let visible: Vec<(usize, &config::Entry)> = if search_active {
                 let sm = main_state();
                 let (fuzzy, pinyin, overrides) = if !sm.is_null() {
@@ -360,7 +380,7 @@ unsafe fn build_codes_tab(
                         return true;
                     }
                     if pinyin || fuzzy {
-                        if let Some(lv) = match_level(&e.key, search, false, fuzzy, pinyin, overrides) {
+                        if let Some(lv) = match_level(search, &e.key, false, fuzzy, pinyin, overrides) {
                             if lv > 0 { return true; }
                         }
                     }
@@ -483,6 +503,7 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         codes_search: String::new(), codes_version: 0,
         cat_expanded: Vec::new(), cat_menu_open: None, cat_menu_hover: 0,
         scroll_dragging: false, scroll_drag_start_y: 0.0,
+        composing: String::new(),
     };
     SETTINGS = Some(win);
     let _ = ShowWindow(hwnd_s, SW_SHOW);
@@ -576,7 +597,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             // Rebuild widgets if needed
             let mut need_rebuild = s.cat != s.sel_cat;
             if !need_rebuild && s.cat == 2 {
-                let cur_search = s.widgets.first().map(|w| w.text().to_string()).unwrap_or_default();
+                let cur_search = s.widgets.get(1).map(|w| w.text().to_string()).unwrap_or_default();
                 if cur_search != s.codes_search { need_rebuild = true; s.codes_search = cur_search; }
                 if s.codes_version > 0 { need_rebuild = true; s.codes_version = 0; }
             }
@@ -591,7 +612,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if s.cat == 2 {
                     let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded);
                     s.widgets = widgets;
-                    s.focused_idx = Some(0);
+                    s.focused_idx = Some(1);
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
                 }
@@ -711,12 +732,16 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 }
             }
 
+            let ident = Mtx { _11: 1.0, _12: 0.0, _21: 0.0, _22: 1.0, _31: 0.0, _32: 0.0 };
+            s.d2d_context.SetTransform(&ident as *const _ as *const _);
+            s.d2d_context.PopAxisAlignedClip();
+
             // ── 滚动条 ──
-            let track_l = S_W as f32 - 14.0;
+            let track_l = S_W as f32 - 16.0;
             let track_t = TITLE_H + 4.0;
             let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
             if let Some(b) = mk_brush_(&s.d2d_context, 0.10, 0.10, 0.10, 1.0) {
-                s.d2d_context.FillRectangle(&D2D_RECT_F { left: track_l, top: track_t, right: track_l + 6.0, bottom: track_t + track_h } as *const _, &b);
+                s.d2d_context.FillRectangle(&D2D_RECT_F { left: track_l, top: track_t, right: track_l + 8.0, bottom: track_t + track_h } as *const _, &b);
             }
             let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
             if max_scroll > 0.0 {
@@ -724,15 +749,11 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let thumb_t = track_t + 5.0 + (s.scroll_y / max_scroll) * (track_h - 10.0 - thumb_h);
                 if let Some(b) = mk_brush_(&s.d2d_context, 0.30, 0.30, 0.30, 1.0) {
                     s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F { left: track_l, top: thumb_t, right: track_l + 6.0, bottom: thumb_t + thumb_h },
+                        rect: D2D_RECT_F { left: track_l, top: thumb_t, right: track_l + 8.0, bottom: thumb_t + thumb_h },
                         radiusX: 3.0, radiusY: 3.0,
                     } as *const _, &b);
                 }
             }
-
-            let ident = Mtx { _11: 1.0, _12: 0.0, _21: 0.0, _22: 1.0, _31: 0.0, _32: 0.0 };
-            s.d2d_context.SetTransform(&ident as *const _ as *const _);
-            s.d2d_context.PopAxisAlignedClip();
 
             // ── 底部操作栏 ──
             if let Some(b) = mk_brush_(&s.d2d_context, 0.06, 0.06, 0.06, 1.0) {
@@ -805,12 +826,13 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let track_t = TITLE_H + 4.0;
                 let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
                 let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
-                if max_scroll > 0.0 && x >= track_l && x <= track_l + 6.0 && y >= track_t && y <= track_t + track_h {
+                if max_scroll > 0.0 && x >= track_l && x <= track_l + 8.0 && y >= track_t && y <= track_t + track_h {
                     let thumb_h = (track_h - 10.0) * (track_h / (track_h + max_scroll));
                     let thumb_t = track_t + 5.0 + (s.scroll_y / max_scroll) * (track_h - 10.0 - thumb_h);
                     if y >= thumb_t && y <= thumb_t + thumb_h {
                         s.scroll_dragging = true;
                         s.scroll_drag_start_y = y;
+                        let _ = SetCapture(h);
                     } else {
                         let ratio = ((y - track_t - 5.0 - thumb_h / 2.0) / (track_h - 10.0 - thumb_h)).clamp(0.0, 1.0);
                         s.scroll_y = ratio * max_scroll;
@@ -933,6 +955,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                 _ => {}
                             }
                         }
+                        let _ = InvalidateRect(Some(h), None, true);
                     }
                     if !handled {
                         if let Some(ci) = s.cat_menu_open {
@@ -992,6 +1015,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let y = ((lp.0 as u32 >> 16) & 0xFFFF) as i32 as f32;
             if let Some(s) = &mut SETTINGS {
                 s.scroll_dragging = false;
+                let _ = ReleaseCapture();
                 let adj_y = y + s.scroll_y;
                 for w in &mut s.widgets { w.on_mouse_up(x, adj_y); }
                 let _ = InvalidateRect(Some(h), None, true);
@@ -1030,6 +1054,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     let _ = InvalidateRect(Some(h), None, true);
                 }
                 for w in &mut s.widgets { w.on_mouse_move(x, adj_y); }
+                let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             }
             return LRESULT(0);
         }
@@ -1113,6 +1138,75 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         if s.widgets[idx].on_char(ch) { let _ = InvalidateRect(Some(h), None, true); }
                     }
                 }
+            }
+            return LRESULT(0);
+        }
+
+        WM_IME_SETCONTEXT => {
+            return DefWindowProcW(h, msg, wp, LPARAM(lp.0 & !(ISC_SHOWUICOMPOSITIONWINDOW as isize)));
+        }
+
+        WM_IME_STARTCOMPOSITION => {
+            if let Some(s) = &mut SETTINGS {
+                let himc = ImmGetContext(h);
+                if himc != 0 {
+                    let r = if let Some(idx) = s.focused_idx {
+                        if idx < s.widgets.len() { s.widgets[idx].bounds() } else { D2D_RECT_F::default() }
+                    } else { D2D_RECT_F::default() };
+                    let cf = COMPOSITIONFORM {
+                        dwStyle: CFS_FORCE_POSITION,
+                        ptCurrentPos: POINT { x: r.left as i32 + 8, y: r.bottom as i32 + 4 },
+                        rcArea: RECT::default(),
+                    };
+                    let _ = ImmSetCompositionWindow(himc, &cf);
+                    let _ = ImmReleaseContext(h, himc);
+                }
+            }
+            return LRESULT(0);
+        }
+
+        WM_IME_COMPOSITION => {
+            if let Some(s) = &mut SETTINGS {
+                let himc = ImmGetContext(h);
+                if himc != 0 {
+                    let r = if let Some(idx) = s.focused_idx {
+                        if idx < s.widgets.len() { s.widgets[idx].bounds() } else { D2D_RECT_F::default() }
+                    } else { D2D_RECT_F::default() };
+                    let cf = COMPOSITIONFORM {
+                        dwStyle: CFS_FORCE_POSITION,
+                        ptCurrentPos: POINT { x: r.left as i32, y: r.bottom as i32 },
+                        rcArea: RECT::default(),
+                    };
+                    let _ = ImmSetCompositionWindow(himc, &cf);
+
+                    if lp.0 as usize & GCS_RESULTSTR as usize != 0 {
+                        if let Some(idx) = s.focused_idx {
+                            if idx < s.widgets.len() {
+                                let len = ImmGetCompositionStringW(himc, GCS_RESULTSTR, ptr::null_mut(), 0);
+                                if len > 0 {
+                                    let mut buf = vec![0u16; (len as usize) / 2 + 1];
+                                    let _ = ImmGetCompositionStringW(himc, GCS_RESULTSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
+                                    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                                    let result = String::from_utf16_lossy(&buf[..end]);
+                                    for c in result.chars() {
+                                        s.widgets[idx].on_char(c as u32);
+                                    }
+                                }
+                            }
+                        }
+                        s.composing.clear();
+                    }
+                    let _ = ImmReleaseContext(h, himc);
+                    let _ = InvalidateRect(Some(h), None, true);
+                }
+            }
+            return LRESULT(0);
+        }
+
+        WM_IME_ENDCOMPOSITION => {
+            if let Some(s) = &mut SETTINGS {
+                s.composing.clear();
+                let _ = InvalidateRect(Some(h), None, true);
             }
             return LRESULT(0);
         }

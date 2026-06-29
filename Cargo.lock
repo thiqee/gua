@@ -51,6 +51,7 @@ dependencies = [
  "embed-resource",
  "pinyin",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]
