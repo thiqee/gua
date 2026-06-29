@@ -23,6 +23,8 @@ pub enum WidgetCmd {
     CatToggle(usize),
     ExpandAll,
     CollapseAll,
+    CatRename(usize),
+    CatDelete(usize),
 }
 
 pub trait Widget {
@@ -332,10 +334,10 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: 0, hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
     }
     pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: 0, hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
     }
     fn sel_range(&self) -> Option<(usize, usize)> {
         self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
@@ -455,7 +457,7 @@ impl Widget for TextInput {
 
     fn set_focused(&mut self, val: bool) {
         self.focused = val;
-        if val { self.cursor_pos = self.text.len(); } else { self.select_all = false; self.sel_start = None; self.mouse_down = false; }
+        if !val { self.select_all = false; self.sel_start = None; self.mouse_down = false; }
     }
     fn focused(&self) -> bool { self.focused }
     fn text(&self) -> &str { &self.text }
@@ -668,6 +670,119 @@ impl Widget for IconButton {
         if let Some(b) = mk_brush(&res.d2d, c, c, c, 1.0) {
             if let Some(tf) = tf_center(&res.dwrite, 13.0) {
                 draw_text(&res.d2d, &self.icon, &tf, &self.r, &b);
+            }
+        }
+    }
+}
+
+// ── ThreeDotsButton ──
+
+pub struct ThreeDotsButton {
+    r: D2D_RECT_F,
+    pub items: Vec<String>,
+    pub open: bool,
+    pub selected: Option<usize>,
+    hovered: i32,
+    cidx: usize,
+}
+
+impl ThreeDotsButton {
+    pub fn new(items: &[&str], cidx: usize) -> Self {
+        Self {
+            r: D2D_RECT_F::default(),
+            items: items.iter().map(|s| s.to_string()).collect(),
+            open: false,
+            selected: None,
+            hovered: -1,
+            cidx,
+        }
+    }
+}
+
+impl Widget for ThreeDotsButton {
+    fn cmd(&self) -> WidgetCmd {
+        match self.selected {
+            Some(0) => WidgetCmd::CatRename(self.cidx),
+            Some(1) => WidgetCmd::CatDelete(self.cidx),
+            _ => WidgetCmd::None,
+        }
+    }
+    fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
+    fn bounds(&self) -> D2D_RECT_F { self.r }
+    fn set_focused(&mut self, _val: bool) {}
+
+    fn on_mouse_move(&mut self, x: f32, y: f32) {
+        self.hovered = -1;
+        if self.open {
+            let popup_l = self.r.right - 136.0;
+            let popup_t = self.r.top + 34.0;
+            let item_h = 28.0;
+            let popup_h = self.items.len() as f32 * item_h + 8.0;
+            if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
+                let mi = ((y - popup_t - 4.0) / item_h) as i32;
+                self.hovered = mi.min(self.items.len() as i32 - 1);
+            }
+        }
+    }
+    fn on_mouse_leave(&mut self) { self.hovered = -1; }
+
+    fn on_click_with(&mut self, x: f32, y: f32, _res: &D2DRes) -> bool {
+        if self.open {
+            let popup_l = self.r.right - 136.0;
+            let popup_t = self.r.top + 34.0;
+            let item_h = 28.0;
+            let popup_h = self.items.len() as f32 * item_h + 8.0;
+            if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
+                let mi = ((y - popup_t - 4.0) / item_h) as usize;
+                if mi < self.items.len() {
+                    self.selected = Some(mi);
+                    self.open = false;
+                    return true;
+                }
+            }
+            self.open = false;
+            return false;
+        }
+        if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
+            self.open = !self.open;
+            self.selected = None;
+            return true;
+        }
+        false
+    }
+
+    fn draw(&self, res: &D2DRes) {
+        let c = if self.open || self.hovered == -1 { 0.85 } else { 0.55 };
+        if let Some(b) = mk_brush(&res.d2d, c, c, c, 1.0) {
+            if let Some(tf) = tf_center(&res.dwrite, 13.0) {
+                draw_text(&res.d2d, "⋮", &tf, &self.r, &b);
+            }
+        }
+        if self.open {
+            let popup_l = self.r.right - 136.0;
+            let popup_t = self.r.top + 34.0;
+            let popup_r = D2D_RECT_F { left: popup_l, top: popup_t, right: popup_l + 120.0, bottom: popup_t + self.items.len() as f32 * 28.0 + 8.0 };
+            let rr = D2D1_ROUNDED_RECT { rect: popup_r, radiusX: 6.0, radiusY: 6.0 };
+            if let Some(b) = mk_brush(&res.d2d, 0.12, 0.12, 0.12, 1.0) {
+                unsafe { res.d2d.FillRoundedRectangle(&rr as *const _, &b); }
+            }
+            if let Some(b) = mk_brush(&res.d2d, 0.20, 0.20, 0.20, 1.0) {
+                unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            }
+            for (mi, label) in self.items.iter().enumerate() {
+                let item_y = popup_t + 4.0 + mi as f32 * 28.0;
+                let item_r = D2D_RECT_F { left: popup_l + 4.0, top: item_y, right: popup_l + 116.0, bottom: item_y + 26.0 };
+                if mi as i32 == self.hovered {
+                    if let Some(b) = mk_brush(&res.d2d, 0.20, 0.20, 0.20, 1.0) {
+                        let irr = D2D1_ROUNDED_RECT { rect: item_r, radiusX: 4.0, radiusY: 4.0 };
+                        unsafe { res.d2d.FillRoundedRectangle(&irr as *const _, &b); }
+                    }
+                }
+                if let Some(tf) = make_tf(&res.dwrite, 13.0) {
+                    if let Some(b) = mk_brush(&res.d2d, 0.80, 0.80, 0.80, 1.0) {
+                        draw_text(&res.d2d, label, &tf, &item_r, &b);
+                    }
+                }
             }
         }
     }

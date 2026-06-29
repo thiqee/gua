@@ -68,8 +68,6 @@ pub struct SettingsWin {
     codes_search: String,
     codes_version: usize,
     cat_expanded: Vec<bool>,
-    cat_menu_open: Option<usize>,
-    cat_menu_hover: usize,
     scroll_dragging: bool,
     scroll_drag_start_y: f32,
     composing: String,
@@ -357,8 +355,7 @@ unsafe fn build_codes_tab(
         add_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w - 100.0, top: y, right: inner_l + inner_w - menu_btn_w - 4.0, bottom: y + row_h });
         w.push(Box::new(add_btn));
 
-        let mut menu_btn = IconButton::new("⋮");
-        menu_btn.cmd = WidgetCmd::CatMenu(ci);
+        let mut menu_btn = ThreeDotsButton::new(&["重命名分类", "删除分类"], ci);
         menu_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w, top: y, right: inner_l + inner_w, bottom: y + row_h });
         w.push(Box::new(menu_btn));
         y += row_h + 4.0;
@@ -501,7 +498,7 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         mod_held: [false; 4],
         close_hovered: false, save_hovered: false,
         codes_search: String::new(), codes_version: 0,
-        cat_expanded: Vec::new(), cat_menu_open: None, cat_menu_hover: 0,
+        cat_expanded: Vec::new(),
         scroll_dragging: false, scroll_drag_start_y: 0.0,
         composing: String::new(),
     };
@@ -612,8 +609,6 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if s.cat == 2 {
                     let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded);
                     s.widgets = widgets;
-                    s.focused_idx = Some(1);
-                    if s.widgets.len() > 1 { s.widgets[1].set_focused(true); }
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
                 }
@@ -693,44 +688,6 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let res = D2DRes { d2d: s.d2d_context.clone(), dwrite };
                 for widget in &s.widgets { widget.draw(&res); }
                 for widget in &s.widgets { widget.draw_overlay(&res); }
-            }
-
-            // Draw category popup menu if open
-            if let Some(ci) = s.cat_menu_open {
-                if ci < s.cards.len() {
-                    let card = s.cards[ci];
-                    let popup_l = card.right - 136.0;
-                    let popup_top = card.top + 34.0;
-                    let popup_r = D2D_RECT_F { left: popup_l, top: popup_top, right: popup_l + 120.0, bottom: popup_top + 64.0 };
-                    let rr = D2D1_ROUNDED_RECT { rect: popup_r, radiusX: 6.0, radiusY: 6.0 };
-                    if let Some(b) = mk_brush_(&s.d2d_context, 0.12, 0.12, 0.12, 1.0) {
-                        s.d2d_context.FillRoundedRectangle(&rr as *const _, &b);
-                    }
-                    if let Some(b) = mk_brush_(&s.d2d_context, 0.20, 0.20, 0.20, 1.0) {
-                        unsafe { let _ = s.d2d_context.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
-                    }
-                    let items = ["重命名分类", "删除分类"];
-                    for (mi, label) in items.iter().enumerate() {
-                        let item_y = popup_top + 4.0 + mi as f32 * 28.0;
-                        let item_r = D2D_RECT_F { left: popup_l + 4.0, top: item_y, right: popup_l + 116.0, bottom: item_y + 26.0 };
-                        if mi == s.cat_menu_hover {
-                            if let Some(b) = mk_brush_(&s.d2d_context, 0.20, 0.20, 0.20, 1.0) {
-                                let irr = D2D1_ROUNDED_RECT { rect: item_r, radiusX: 4.0, radiusY: 4.0 };
-                                unsafe { s.d2d_context.FillRoundedRectangle(&irr as *const _, &b); }
-                            }
-                        }
-                        if let Some(ref dwf) = dwf {
-                            let f = to_w("Microsoft YaHei"); let l = to_w("en-us");
-                            if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(l.as_ptr())) {
-                                let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-                                let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                                if let Some(b) = mk_brush_(&s.d2d_context, 0.80, 0.80, 0.80, 1.0) {
-                                    s.d2d_context.DrawText(&to_w(label), &tf, &item_r as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             let ident = Mtx { _11: 1.0, _12: 0.0, _21: 0.0, _22: 1.0, _31: 0.0, _32: 0.0 };
@@ -920,15 +877,6 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     }
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
-                                WidgetCmd::CatMenu(ci) => {
-                                    if s.cat_menu_open == Some(ci) {
-                                        s.cat_menu_open = None;
-                                    } else {
-                                        s.cat_menu_open = Some(ci);
-                                        s.cat_menu_hover = 0;
-                                    }
-                                    let _ = InvalidateRect(Some(h), None, true);
-                                }
                                 WidgetCmd::CatToggle(ci) => {
                                     sync_codes_entries(s);
                                     if ci < s.cat_expanded.len() {
@@ -953,58 +901,49 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     s.codes_version += 1;
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
+                                WidgetCmd::CatRename(ci) => {
+                                    // TODO: rename category dialog
+                                    let _ = InvalidateRect(Some(h), None, true);
+                                }
+                                WidgetCmd::CatDelete(ci) => {
+                                    sync_codes_entries(s);
+                                    let s_main = main_state();
+                                    if !s_main.is_null() {
+                                        let state = &mut *s_main;
+                                        let cat_name = {
+                                            let mut m: Vec<String> = Vec::new();
+                                            for e in &state.entries {
+                                                if e.key.starts_with('_') { continue; }
+                                                let n = e.category.as_deref().unwrap_or("未分类").to_string();
+                                                if !m.contains(&n) { m.push(n); }
+                                            }
+                                            if let Some(p) = m.iter().position(|n| n == "未分类") {
+                                                let u = m.remove(p); m.push(u);
+                                            }
+                                            m.get(ci).cloned().unwrap_or_default()
+                                        };
+                                        state.entries.retain(|e| {
+                                            if e.key.starts_with('_') { return true; }
+                                            e.category.as_deref().unwrap_or("未分类") != cat_name
+                                        });
+                                        s.codes_version += 1;
+                                    }
+                                    let _ = InvalidateRect(Some(h), None, true);
+                                }
                                 _ => {}
                             }
+                        }
+                        // Non-focusable click → clear focus
+                        if !s.widgets[handled_idx].focused() {
+                            if let Some(oi) = old_idx {
+                                if oi < s.widgets.len() { s.widgets[oi].set_focused(false); }
+                            }
+                            s.focused_idx = None;
                         }
                         let _ = InvalidateRect(Some(h), None, true);
                     }
                     if !handled {
-                        if let Some(ci) = s.cat_menu_open {
-                            if ci < s.cards.len() {
-                                let card = s.cards[ci];
-                                let adj_y = y + s.scroll_y;
-                                let popup_l = card.right - 136.0;
-                                let popup_t = card.top + 34.0;
-                                let on_menu = adj_y >= popup_t + 4.0 && adj_y < popup_t + 68.0 && x >= popup_l && x < popup_l + 120.0;
-                                if on_menu {
-                                    let item_idx = ((adj_y - popup_t - 4.0) / 28.0) as usize;
-                                    let ci = s.cat_menu_open.unwrap_or(0);
-                                    s.cat_menu_open = None;
-                                    if item_idx == 1 && s.cat == 2 {
-                                        sync_codes_entries(s);
-                                        let s_main = main_state();
-                                        if !s_main.is_null() {
-                                            let state = &mut *s_main;
-                                            let cat_name = {
-                                                let mut m: Vec<String> = Vec::new();
-                                                for e in &state.entries {
-                                                    if e.key.starts_with('_') { continue; }
-                                                    let n = e.category.as_deref().unwrap_or("未分类").to_string();
-                                                    if !m.contains(&n) { m.push(n); }
-                                                }
-                                                if let Some(p) = m.iter().position(|n| n == "未分类") {
-                                                    let u = m.remove(p); m.push(u);
-                                                }
-                                                m.get(ci).cloned().unwrap_or_default()
-                                            };
-                                            state.entries.retain(|e| {
-                                                if e.key.starts_with('_') { return true; }
-                                                e.category.as_deref().unwrap_or("未分类") != cat_name
-                                            });
-                                            s.codes_version += 1;
-                                        }
-                                    }
-                                } else {
-                                    s.cat_menu_open = None;
-                                }
-                                let _ = InvalidateRect(Some(h), None, true);
-                            } else {
-                                s.cat_menu_open = None;
-                                let _ = InvalidateRect(Some(h), None, true);
-                            }
-                        } else {
-                            clear_focus(s);
-                        }
+                        clear_focus(s);
                     }
                 }
             }
