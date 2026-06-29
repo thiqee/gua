@@ -962,7 +962,7 @@ impl Widget for MultilineTextInput {
         let vis_h = self.r.bottom - self.r.top - 4.0;
 
         if let Some(tf) = make_tf(&res.dwrite, 14.0) {
-            unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP); }
+            unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER); }
             let ws: Vec<u16> = self.text.encode_utf16().collect();
             if let Ok(layout) = unsafe { res.dwrite.CreateTextLayout(&ws, &tf, box_w.max(1.0), 10000.0) } {
                 let mut m = DWRITE_TEXT_METRICS::default();

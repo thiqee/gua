@@ -613,6 +613,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded);
                     s.widgets = widgets;
                     s.focused_idx = Some(1);
+                    if s.widgets.len() > 1 { s.widgets[1].set_focused(true); }
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
                 }
