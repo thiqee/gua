@@ -25,6 +25,7 @@ pub struct TextInput {
     pub center: bool,                        // 是否居中模式
     pub select_on_focus: bool,               // 聚焦时全选
     scroll_x: std::cell::Cell<f32>,          // 水平滚动偏移
+    scroll_hold: std::cell::Cell<bool>,      // 阻止 auto-scroll（重建/鼠标释放后）
     mouse_down: bool,
     sel_start: Option<usize>,                // 选择起始 (None = 无选区)
     sel_end: usize,                          // 选择终点
@@ -33,6 +34,25 @@ pub struct TextInput {
 ```
 
 `scroll_x` 使用 `Cell<f32>` 是因为 `draw()` 只接受 `&self`，不能修改成员变量。
+
+```rust
+pub struct MultilineTextInput {
+    r: D2D_RECT_F,                          // 控件边框
+    pub text: String,                        // 文本内容
+    focused: bool,
+    scroll_y: std::cell::Cell<f32>,          // 垂直滚动偏移
+    content_h: std::cell::Cell<f32>,         // 实际内容高度（用于滚动条）
+    scroll_hold: std::cell::Cell<bool>,      // 阻止 auto-scroll
+    hovered: bool,
+    cursor_pos: usize,
+    mouse_down: bool,
+    sel_start: Option<usize>,
+    sel_end: usize,
+    dwrite_factory: Option<IDWriteFactory>,
+}
+```
+
+`scroll_y` 和 `content_h` 使用 `Cell<f32>` 因为 `draw()` 接受 `&self`。
 
 ---
 
@@ -113,18 +133,26 @@ let cx = if use_center { self.r.left + px }
 
 ### 4.3 自动滚动
 
-仅 `!use_center` 时生效。检查光标（或选区远端）的像素位置：
+仅 `!use_center` 时生效。每帧 `draw()` 检查光标（或选区远端）的像素位置：
 - 若 `px < sx + 10` → 向左滚，让光标离左边缘至少10px
 - 若 `px - sx > box_w2 - 10` → 向右滚，让光标离右边缘至少10px
 
 ```rust
-let far = if self.mouse_down { self.sel_end.max(self.cursor_pos) }
-          else { self.cursor_pos };
-// HitTestTextPosition(far) → fpx
-let cushion = 10.0;
-if fpx < sx + cushion { sx = (fpx - cushion).max(0.0); }
-else if fpx - sx > box_w2 - cushion { sx = (fpx - box_w2 + cushion).max(0.0); }
+if !self.scroll_hold.get() || self.mouse_down {
+    let far = if self.mouse_down { self.sel_end }
+              else { self.cursor_pos };
+    let cushion = 10.0;
+    if fpx < sx + cushion { sx = (fpx - cushion).max(0.0); }
+    else if fpx - sx > box_w2 - cushion { sx = (fpx - box_w2 + cushion).max(0.0); }
+}
 ```
+
+`scroll_hold` 机制：
+- 构造器、`on_mouse_up`、`on_mouse_wheel` → `scroll_hold = true`（阻止自动滚动）
+- `on_mouse_down`、`on_click_with`、`on_key_down`、`on_char` → `scroll_hold = false`（恢复自动滚动）
+- `draw()` **只检查不清除**
+
+拖选期间 `far = sel_end`（始终跟踪移动端），修正了之前 `sel_end.max(cursor_pos)` 导致向左拖选时 `far` 停留在起点不动的 bug。
 
 注意：`box_w2` 固定为 `right - left - 16`（layout 宽度），因为自动滚动只在左对齐 layout 上执行。
 
@@ -246,13 +274,21 @@ if !use_center {
 
 **根因**：搜索框属于 codes tab（`s.cat == 2`），每次按键触发 `need_rebuild = true`，`build_codes_tab` 创建全新 `TextInput`，新控件 `focused = false`。settings 将 `focused_idx = Some(1)` 记录为焦点索引，但**没有调用新控件的 `set_focused(true)`**。draw 检查 `self.focused` → false → 不画光标。但键盘事件分发使用 `focused_idx` 索引而非 widget 的 `focused` 字段，所以输入/删除仍正常。
 
-**修复**：重建 widgets 后加 `.set_focused(true)`。
+**修复**：重建前保存焦点，重建后恢复（仅同 tab 内重建，不包括切 tab）：
 
 ```rust
-// settings.rs:615-616
-s.focused_idx = Some(1);
-if s.widgets.len() > 1 { s.widgets[1].set_focused(true); }
+let restore_focus = if !was_cat_switch { s.focused_idx } else { None };
+s.focused_idx = None;
+// ... 重建 widgets ...
+if let Some(idx) = restore_focus {
+    if idx < s.widgets.len() {
+        s.focused_idx = Some(idx);
+        s.widgets[idx].set_focused(true);
+    }
+}
 ```
+
+注意：v4 使用的是直接 `s.focused_idx = Some(1)` + `set_focused(true)`，这会导致切换 tab 时搜索框自动聚焦。v6 改为 `restore_focus`，只在同 tab 内才保留焦点。
 
 ### 坑 8：多行输入框纯英文异常截断换行
 
@@ -270,6 +306,54 @@ unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER); }
 ```
 
 副作用：英文长URL或路径会在字符边界断开，视觉上不如单词边界整齐。但对单行英文不多行文本框，这是必要的取舍。
+
+### 坑 9：三次尝试修复拖选后视区跳回起点
+
+**现象**：文字超宽后拖选，松开鼠标视区跳回光标（选区起点）位置。
+
+**根因演变**：
+
+| 尝试 | 改了什么 | 为什么失败 |
+|------|---------|-----------|
+| v4 | `on_mouse_up` 设 `cursor_pos = sel_end` | 光标跳到选区末尾，用户不期望 |
+| v4 撤回 | `on_mouse_up` 改回原样 | 光标回到起点，auto-scroll 又把它显示出来 |
+| v5 | 加 `scroll_locked: Cell<bool>`，mouse_up 锁定一帧 | draw 里清除锁了，第二帧仍然跳 |
+| v6 | `scroll_hold: Cell<bool>`，改成交互时才清除 | 才真正解决 |
+
+**最终修复（v6）**：`scroll_hold` 状态机：
+
+```
+  构造器 → scroll_hold = true
+  on_mouse_up → scroll_hold = true
+  on_mouse_wheel → scroll_hold = true  （多行）
+  ─────────────────────────────────────
+  on_mouse_down → scroll_hold = false
+  on_click_with → scroll_hold = false
+  on_key_down → scroll_hold = false
+  on_char → scroll_hold = false
+  ─────────────────────────────────────
+  draw() 的 auto-scroll:
+    if scroll_hold → 跳过（不清除）
+    else → 执行
+```
+
+draw **只检查不清除**，所以只要用户不交互，视区永不自动跳。
+
+### 坑 10：向左拖选视区不动
+
+**现象**：从左向右拖选时视区跟着鼠标向右滚，但从右向左拖选时视区不动。
+
+**根因**：auto-scroll 的 `far` 公式为 `sel_end.max(cursor_pos)`。`max` 始终取**右端**。向左拖时 `sel_end < cursor_pos`，`far = cursor_pos`（固定起点），auto-scroll 检测不到左端在移动。
+
+**修复**：`far = sel_end`（始终跟踪移动端）。
+
+### 坑 11：多行滚轮只能滚一点
+
+**现象**：多行输入框用鼠标滚轮只能滚动一点点就卡住。
+
+**根因**：滚轮设 `scroll_y` 后，下一帧 `draw()` 的 auto-scroll 接管——用 `cursor_pos` 做 `far`，如果光标在当前可见区域，auto-scroll 把 `scroll_y` 调回原位，抵消了滚轮的效果。
+
+**修复**：`on_mouse_wheel` 设 `scroll_hold = true`，阻止 auto-scroll 干扰。
 
 ---
 
@@ -289,6 +373,12 @@ unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER); }
 
 7. **选区的 `sel_start` 在 `on_mouse_down` 中设置**，而 `on_mouse_down` 在 `on_click_with` 之后调用。所以 `on_click_with` 中 `self.sel_start = None` 是安全的——on_mouse_down 会紧接着覆盖。
 
+8. **`scroll_hold` 只在 draw 里检查，不要在 draw 里清除**。否则 scroll_hold 只会跳一帧，下一帧继续跳。正确做法：仅在用户交互方法（`on_mouse_down` / `on_click_with` / `on_key_down` / `on_char`）中清除。`on_mouse_up` 和 `on_mouse_wheel` 设 hold。
+
+9. **`far` 必须跟踪移动端，而非取 Max**。拖选时唯一在变的是 `sel_end`。`sel_end.max(cursor_pos)` 会把向左拖选的 `far` 锁定在 `cursor_pos`（起点），导致 auto-scroll 以为用户还在右端。
+
+10. **`TextInput::new` 的 `cursor_pos` 应为 `text.len()`**。原始代码取 `text.len()` 是正确的——新输入框的光标应当在末尾。之前改成 `0` 导致两个问题：搜索框重建后光标固定在左端、文字从光标右面出现。配合 `scroll_hold` 首帧保护，不会触发 auto-scroll 跳转。
+
 ---
 
 ## 9. 版本历史
@@ -300,6 +390,8 @@ unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER); }
 | v2 | 统一三处 `use_center`，边缘滚动加闸 | 但 `HitTestPoint` clamp 未删 → 超宽后字符选不到 |
 | v3 | 删除 `rel_x.clamp(0.0, box_w)` | 超宽后可正常选中全部字符 |
 | v4 | 搜索框重建后恢复焦点 + 多行英文改为 CHARACTER 换行 | 光标不消失；英文逐字断行 |
+| v5 | `ThreeDotsButton` 自包含弹出菜单；`scroll_locked` 尝试失败 | 三点菜单不再穿透；但 `scroll_locked` 只跳一帧 |
+| v6 | `scroll_hold` 交互式清除；`far = sel_end` 单向拖选跟踪；`on_mouse_wheel` 设 hold；`TextInput::new` cursor_pos 改回 `text.len()` | 拖选后不跳回、向左拖选视区跟着走、滚轮不被 auto-scroll 抵消、重建后不跳末尾 |
 
 ---
 
@@ -307,15 +399,24 @@ unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER); }
 
 | 函数 | 文件:行 | 用途 |
 |------|---------|------|
-| `make_tf` | widget.rs:52 | 创建基本左对齐 TextFormat |
-| `tf_center_nowrap` | widget.rs:1061 | 居中 + 不换行 TextFormat |
-| `tf_vcenter_nowrap` | widget.rs:1071 | 垂直居中 + 不换行 TextFormat |
-| `text_width` | widget.rs:76 | 测量文本宽度（CreateTextLayout + GetMetrics） |
-| `cursor_from_x` | widget.rs:108 | **未使用**，用 `HitTestPoint` 从 x 映射到字符位置 |
-| `utf16_to_byte` | widget.rs:89 | UTF-16 位置 → byte 位置 |
-| `byte_to_utf16` | widget.rs:99 | byte 位置 → UTF-16 位置 |
-| `MultilineTextInput::draw` | widget.rs:948 | 多行输入框绘制（含自动滚动 + 滚动条） |
-| `MultilineTextInput::on_mouse_move` | widget.rs:764 | 多行纵向边缘滚动拖选 |
-| `MultilineTextInput::on_click_with` | widget.rs:807 | 多行点击定位光标 |
-| `MultilineTextInput::on_key_down` | widget.rs:848 | 多行键盘（含↑↓纵向跳行） |
-| `MultilineTextInput::on_char` | widget.rs:932 | 多行字符（`\r→\n`） |
+| `make_tf` | widget.rs:54 | 创建基本左对齐 TextFormat |
+| `tf_center_nowrap` | widget.rs:1224 | 居中 + 不换行 TextFormat |
+| `tf_vcenter_nowrap` | widget.rs:1234 | 垂直居中 + 不换行 TextFormat |
+| `text_width` | widget.rs:78 | 测量文本宽度（CreateTextLayout + GetMetrics） |
+| `cursor_from_x` | widget.rs:110 | **未使用**，用 `HitTestPoint` 从 x 映射到字符位置 |
+| `TextInput::sync_scroll` | widget.rs:353 | 方向键后同步滚动偏移，与 draw 中的 auto-scroll 逻辑一致 |
+| `utf16_to_byte` | widget.rs:91 | UTF-16 位置 → byte 位置 |
+| `byte_to_utf16` | widget.rs:101 | byte 位置 → UTF-16 位置 |
+| `MultilineTextInput` (struct) | widget.rs:857+ | 多行输入框结构 |
+| `MultilineTextInput::draw` | widget.rs:1101 | 多行输入框绘制（含自动滚动 + 滚动条） |
+| `MultilineTextInput::on_mouse_move` | widget.rs:911 | 多行纵向边缘滚动拖选 |
+| `MultilineTextInput::on_click_with` | widget.rs:955 | 多行点击定位光标 |
+| `MultilineTextInput::on_key_down` | widget.rs:998 | 多行键盘（含↑↓纵向跳行） |
+| `MultilineTextInput::on_char` | widget.rs:1084 | 多行字符（`\r→\n`） |
+| `MultilineTextInput::on_mouse_wheel` | widget.rs:988 | 多行滚轮滚动 |
+| `ThreeDotsButton` (struct) | widget.rs:707 | 自包含三点菜单按钮 |
+| `ThreeDotsButton::draw` | widget.rs:781 | ⋮ 按钮绘制 |
+| `ThreeDotsButton::draw_overlay` | widget.rs:790 | 弹出菜单绘制（在所有 widget 之上） |
+| `ThreeDotsButton::on_click_with` | widget.rs:751 | 点击处理（按钮 toggle + 菜单项选中） |
+| `ThreeDotsButton::on_mouse_move` | widget.rs:740 | 弹出菜单 hover 追踪 |
+| `Dropdown::draw_overlay` | widget.rs:1387 | 下拉菜单弹出列表绘制（参考——弹出式菜单的模板模式） |

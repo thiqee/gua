@@ -71,6 +71,8 @@ pub struct SettingsWin {
     scroll_dragging: bool,
     scroll_drag_start_y: f32,
     composing: String,
+    cat_renaming: Option<usize>,
+    cat_renaming_old: String,
 }
 
 #[allow(static_mut_refs)]
@@ -264,6 +266,8 @@ unsafe fn build_codes_tab(
     content_h: &mut f32,
     search: &str,
     cat_expanded: &mut Vec<bool>,
+    cat_renaming: &Option<usize>,
+    cat_renaming_old: &str,
 ) -> Vec<Box<dyn Widget>> {
     let cx = CONTENT_L + CONTENT_PAD;
     let cw = (S_W as f32) - CONTENT_L - CONTENT_PAD - CONTENT_PAD;
@@ -345,10 +349,17 @@ unsafe fn build_codes_tab(
         arr_lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 20.0, bottom: y + row_h });
         w.push(Box::new(arr_lbl));
 
-        let mut name_lbl = ClickLabel::new(cat_name);
-        name_lbl.cmd = WidgetCmd::CatToggle(ci);
-        name_lbl.set_bounds(D2D_RECT_F { left: inner_l + 24.0, top: y, right: inner_l + inner_w - menu_btn_w - 104.0, bottom: y + row_h });
-        w.push(Box::new(name_lbl));
+        if *cat_renaming == Some(ci) {
+            let mut rename_inp = TextInput::new(cat_renaming_old);
+            rename_inp.set_bounds(D2D_RECT_F { left: inner_l + 24.0, top: y, right: inner_l + inner_w - menu_btn_w - 104.0, bottom: y + row_h });
+            rename_inp.set_focused(true);
+            w.push(Box::new(rename_inp));
+        } else {
+            let mut name_lbl = ClickLabel::new(cat_name);
+            name_lbl.cmd = WidgetCmd::CatToggle(ci);
+            name_lbl.set_bounds(D2D_RECT_F { left: inner_l + 24.0, top: y, right: inner_l + inner_w - menu_btn_w - 104.0, bottom: y + row_h });
+            w.push(Box::new(name_lbl));
+        }
 
         let mut add_btn = IconButton::new("＋添加识别码");
         add_btn.cmd = WidgetCmd::EntryAdd(ci);
@@ -501,6 +512,8 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         cat_expanded: Vec::new(),
         scroll_dragging: false, scroll_drag_start_y: 0.0,
         composing: String::new(),
+        cat_renaming: None,
+        cat_renaming_old: String::new(),
     };
     SETTINGS = Some(win);
     let _ = ShowWindow(hwnd_s, SW_SHOW);
@@ -603,14 +616,21 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let was_cat_switch = s.sel_cat != s.cat;
                 s.sel_cat = s.cat;
                 if was_cat_switch { s.scroll_y = 0.0; }
+                let restore_focus = if !was_cat_switch { s.focused_idx } else { None };
                 s.focused_idx = None;
                 set_capturing(s, false);
                 s.mod_held = [false; 4];
                 if s.cat == 2 {
-                    let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded);
+                    let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded, &s.cat_renaming, &s.cat_renaming_old);
                     s.widgets = widgets;
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
+                }
+                if let Some(idx) = restore_focus {
+                    if idx < s.widgets.len() {
+                        s.focused_idx = Some(idx);
+                        s.widgets[idx].set_focused(true);
+                    }
                 }
             }
 
@@ -902,7 +922,24 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
                                 WidgetCmd::CatRename(ci) => {
-                                    // TODO: rename category dialog
+                                    sync_codes_entries(s);
+                                    let s_main = main_state();
+                                    let old_name = if !s_main.is_null() {
+                                        let state = &*s_main;
+                                        let mut cats: Vec<String> = Vec::new();
+                                        for e in &state.entries {
+                                            if e.key.starts_with('_') { continue; }
+                                            let n = e.category.as_deref().unwrap_or("未分类").to_string();
+                                            if !cats.contains(&n) { cats.push(n); }
+                                        }
+                                        if let Some(p) = cats.iter().position(|n| n == "未分类") {
+                                            let u = cats.remove(p); cats.push(u);
+                                        }
+                                        cats.get(ci).cloned().unwrap_or_default()
+                                    } else { String::new() };
+                                    s.cat_renaming = Some(ci);
+                                    s.cat_renaming_old = old_name;
+                                    s.codes_version += 1;
                                     let _ = InvalidateRect(Some(h), None, true);
                                 }
                                 WidgetCmd::CatDelete(ci) => {
@@ -1044,7 +1081,34 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                             }
                         }
                     }
+                } else if vk == 0x0D && s.cat_renaming.is_some() {
+                    if let Some(idx) = s.focused_idx {
+                        if idx < s.widgets.len() {
+                            let new_name = s.widgets[idx].text().to_string();
+                            if !new_name.is_empty() && new_name != s.cat_renaming_old {
+                                let old = s.cat_renaming_old.clone();
+                                let s_main = main_state();
+                                if !s_main.is_null() {
+                                    let state = &mut *s_main;
+                                    for e in &mut state.entries {
+                                        if e.category.as_deref().unwrap_or("未分类") == old {
+                                            e.category = Some(new_name.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    s.cat_renaming = None;
+                    s.cat_renaming_old.clear();
+                    s.codes_version += 1;
+                    let _ = InvalidateRect(Some(h), None, true);
                 } else if vk == 0x1B {
+                    if s.cat_renaming.is_some() {
+                        s.cat_renaming = None;
+                        s.cat_renaming_old.clear();
+                        s.codes_version += 1;
+                    }
                     clear_focus(s);
                     let _ = InvalidateRect(Some(h), None, true);
                 } else if let Some(idx) = s.focused_idx {
