@@ -546,8 +546,8 @@ fn format_hotkey_string(vk: u32, mod_held: &[bool; 4]) -> String {
         0x6E => { parts.push("Separator"); return parts.join("+"); }
         0x6F => { parts.push("/"); return parts.join("+"); }
         0x70..=0x87 => { let n = vk - 0x6F; return format!("{}F{}", parts.join("+"), n); }
-        0x41..=0x5A => { let c = (vk as u8 - 0x41 + b'A') as char; parts.push(Box::leak(Box::new(c.to_string())).as_str()); return parts.join("+"); }
-        0x30..=0x39 => { let c = (vk as u8 - 0x30 + b'0') as char; parts.push(Box::leak(Box::new(c.to_string())).as_str()); return parts.join("+"); }
+        0x41..=0x5A => { let c = (vk as u8 - 0x41 + b'A') as char; return format!("{}+{}", parts.join("+"), c); }
+        0x30..=0x39 => { let c = (vk as u8 - 0x30 + b'0') as char; return format!("{}+{}", parts.join("+"), c); }
         0x6A => { parts.push("*"); return parts.join("+"); }
         0x6B => { parts.push("+"); return parts.join("+"); }
         0x6D => { parts.push("-"); return parts.join("+"); }
@@ -976,10 +976,18 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                 if oi < s.widgets.len() { s.widgets[oi].set_focused(false); }
                             }
                             s.focused_idx = None;
+                            s.cat_renaming = None;
+                            s.cat_renaming_old.clear();
+                            s.codes_version += 1;
                         }
                         let _ = InvalidateRect(Some(h), None, true);
                     }
                     if !handled {
+                        if s.cat_renaming.is_some() {
+                            s.cat_renaming = None;
+                            s.cat_renaming_old.clear();
+                            s.codes_version += 1;
+                        }
                         clear_focus(s);
                     }
                 }
@@ -1048,7 +1056,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     }
                 }
                 if !handled {
-                    s.scroll_y = (s.scroll_y - step).clamp(0.0, (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H - CONTENT_PAD)).max(0.0));
+                    s.scroll_y = (s.scroll_y - step).clamp(0.0, (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0));
                 }
                 let _ = InvalidateRect(Some(h), None, true);
             }
@@ -1222,13 +1230,13 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let _ = GetWindowRect(h, &mut rc);
             let rel_x = x_screen - rc.left;
             let rel_y = y_screen - rc.top;
-            if rel_y >= 0 && rel_y < TITLE_H as i32 && rel_x >= SIDEBAR_W as i32 {
+            if rel_y >= 0 && rel_y < TITLE_H as i32 {
                 return LRESULT(HTCAPTION as isize);
             }
             return LRESULT(HTCLIENT as isize);
         }
 
-        WM_DESTROY => { SETTINGS = None; return LRESULT(0); }
+        WM_DESTROY => { return LRESULT(0); }
         _ => {}
     }
     DefWindowProcW(h, msg, wp, lp)
