@@ -20,6 +20,7 @@ extern "system" {
     fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
 }
 
+use crate::config;
 use crate::draw::*;
 use crate::plugin;
 use crate::state::*;
@@ -319,7 +320,8 @@ pub unsafe extern "system" fn wndproc(
                     return LRESULT(0);
                 }
                 IDM_OPEN_CONFIG => {
-                    let p = to_w(CONFIG_FILE);
+                    let cfg = config::config_path();
+                    let p: Vec<u16> = cfg.to_string_lossy().encode_utf16().collect();
                     let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
                     return LRESULT(0);
                 }

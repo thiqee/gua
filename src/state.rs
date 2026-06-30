@@ -25,7 +25,7 @@ pub const MV: usize = 8;
 pub const FW: f32 = 18.0;
 pub const FUZZY_MATCH_DEFAULT: bool = true;
 pub const PINYIN_SEARCH_DEFAULT: bool = true;
-pub const CONFIG_FILE: &str = "config.toml";
+/// 配置路径改为动态获取: config::config_path()
 
 pub const HOTKEY_ID: i32 = 1;
 

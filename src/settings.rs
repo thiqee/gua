@@ -594,6 +594,13 @@ unsafe fn clear_focus(s: &mut SettingsWin) {
 pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_CLOSE => {
+            if let Some(s) = &mut SETTINGS {
+                if s.cat == 2 { sync_codes_entries(s); }
+            }
+            let sm = main_state();
+            if !sm.is_null() {
+                config::save(config::config_path(), &(*sm).entries);
+            }
             SETTINGS = None;
             let _ = DestroyWindow(h);
             return LRESULT(0);
@@ -791,11 +798,20 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
 
                 if x >= close_l && x <= close_l + 80.0 && y >= bty && y <= bby {
                     if s.cat == 2 { sync_codes_entries(s); }
+                    let sm = main_state();
+                    if !sm.is_null() {
+                        config::save(config::config_path(), &(*sm).entries);
+                    }
                     SETTINGS = None;
                     let _ = DestroyWindow(h);
                     return LRESULT(0);
                 }
                 if x >= save_l && x <= save_l + 80.0 && y >= bty && y <= bby {
+                    if s.cat == 2 { sync_codes_entries(s); }
+                    let sm = main_state();
+                    if !sm.is_null() {
+                        config::save(config::config_path(), &(*sm).entries);
+                    }
                     return LRESULT(0);
                 }
 

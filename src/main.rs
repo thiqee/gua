@@ -53,7 +53,8 @@ fn main() -> Result<()> {
         let dpi = GetDeviceCaps(Some(screen_dc), LOGPIXELSY);
         let _ = ReleaseDC(None, screen_dc);
 
-        let raw_entries = config::load(CONFIG_FILE);
+        let cfg_path = config::config_path();
+        let raw_entries = config::load(&cfg_path);
         let has_explicit_font = raw_entries.iter().any(|e| e.key == "_font");
         let private_font_name = load_private_fonts();
         let font_name = if !has_explicit_font {

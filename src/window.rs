@@ -321,14 +321,15 @@ pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
 
 /// 热重载配置
 pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
-    let cur = std::fs::metadata(CONFIG_FILE)
+    let cfg_path = config::config_path();
+    let cur = std::fs::metadata(&cfg_path)
         .ok()
         .and_then(|m| m.modified().ok());
     let mut font_name = s.font_name.clone();
     let mut font_size = s.font_size;
     let config_changed = s.config_mtime != cur;
     if config_changed {
-        let raw = config::load(CONFIG_FILE);
+        let raw = config::load(&cfg_path);
         let has_explicit_font = raw.iter().any(|e| e.key == "_font");
         let private_font_name = load_private_fonts();
         font_name = if has_explicit_font {
