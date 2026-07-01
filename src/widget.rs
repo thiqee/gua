@@ -52,6 +52,7 @@ pub trait Widget {
     fn bounds(&self) -> D2D_RECT_F { D2D_RECT_F::default() }
     fn tick(&mut self) -> bool { false }
     fn settings_key(&self) -> Option<&str> { None }
+    fn on_ctrl_key(&mut self, _vk: u32) -> bool { false }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { unimplemented!() }
 }
 
@@ -331,7 +332,6 @@ pub struct TextInput {
     focused: bool,
     cursor_pos: usize,
     hovered: bool,
-    select_all: bool,
     pub center: bool,
     pub select_on_focus: bool,
     scroll_x: std::cell::Cell<f32>,
@@ -345,10 +345,10 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
     }
     pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
     }
     fn sel_range(&self) -> Option<(usize, usize)> {
         self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
@@ -435,8 +435,10 @@ impl Widget for TextInput {
         self.scroll_hold.set(false);
         if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
             self.mouse_down = true;
-            self.sel_start = Some(self.cursor_pos);
-            self.sel_end = self.cursor_pos;
+            if self.sel_start.map_or(true, |s| s == self.sel_end) {
+                self.sel_start = Some(self.cursor_pos);
+                self.sel_end = self.cursor_pos;
+            }
         }
     }
 
@@ -459,9 +461,11 @@ impl Widget for TextInput {
         self.sel_start = None;
         if !self.focused {
             self.focused = true;
-            self.select_all = self.select_on_focus;
-        } else {
-            self.select_all = false;
+            if self.select_on_focus && !self.text.is_empty() {
+                self.sel_start = Some(0);
+                self.sel_end = self.text.len();
+                self.cursor_pos = self.text.len();
+            }
         }
         let use_center = if self.center {
             make_tf(&res.dwrite, 14.0).map(|tf| text_width(&res.dwrite, &tf, &self.text) <= (self.r.right - self.r.left)).unwrap_or(true)
@@ -490,19 +494,58 @@ impl Widget for TextInput {
 
     fn set_focused(&mut self, val: bool) {
         self.focused = val;
-        if !val { self.scroll_hold.set(true); self.select_all = false; self.sel_start = None; self.mouse_down = false; }
+        if !val { self.scroll_hold.set(true); self.sel_start = None; self.mouse_down = false; }
     }
     fn focused(&self) -> bool { self.focused }
     fn text(&self) -> &str { &self.text }
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
+    fn on_ctrl_key(&mut self, vk: u32) -> bool {
+        match vk {
+            0x41 => {
+                if self.text.is_empty() { return true; }
+                self.sel_start = Some(0);
+                self.sel_end = self.text.len();
+                self.cursor_pos = self.text.len();
+                self.scroll_x.set(0.0);
+                true
+            }
+            0x43 => {
+                if let Some((lo, hi)) = self.sel_range() {
+                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
+                }
+                true
+            }
+            0x56 => {
+                if let Some(text) = clipboard_paste() {
+                    if let Some((lo, hi)) = self.sel_range() {
+                        self.text.replace_range(lo..hi, &text);
+                        self.cursor_pos = lo + text.len();
+                        self.sel_start = None;
+                    } else {
+                        self.text.insert_str(self.cursor_pos, &text);
+                        self.cursor_pos += text.len();
+                    }
+                    self.scroll_hold.set(false);
+                }
+                true
+            }
+            0x58 => {
+                if let Some((lo, hi)) = self.sel_range() {
+                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
+                    self.text.replace_range(lo..hi, "");
+                    self.cursor_pos = lo;
+                    self.sel_start = None;
+                    self.scroll_hold.set(false);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn on_key_down(&mut self, vk: u32) -> bool {
         self.scroll_hold.set(false);
-        if self.select_all {
-            self.text.clear();
-            self.cursor_pos = 0;
-            self.select_all = false;
-        }
         match vk {
             0x08 => {
                 if let Some((lo, hi)) = self.sel_range() {
@@ -553,11 +596,6 @@ impl Widget for TextInput {
 
     fn on_char(&mut self, ch: u32) -> bool {
         self.scroll_hold.set(false);
-        if self.select_all {
-            self.text.clear();
-            self.cursor_pos = 0;
-            self.select_all = false;
-        }
         if let Some(c) = char::from_u32(ch) {
             if !c.is_control() {
                 if self.sel_start.is_some() {
@@ -595,7 +633,7 @@ impl Widget for TextInput {
         } else { false };
 
         // ── text drawing (independent of layout) ──
-        if self.focused && self.select_all {
+        if self.focused && self.sel_start == Some(0) && self.sel_end == self.text.len() && !self.text.is_empty() {
             if let Some(tf) = if use_center { tf_center_nowrap(&res.dwrite, 14.0) } else { tf_vcenter_nowrap(&res.dwrite, 14.0) } {
                 let tw = text_width(&res.dwrite, &tf, &self.text);
                 let box_w = self.r.right - self.r.left;
@@ -650,7 +688,7 @@ impl Widget for TextInput {
                     }
                 }
                 // Cursor
-                if self.focused && !self.select_all {
+                if self.focused && self.sel_start.is_none() {
                     let mut px = 0.0f32; let mut py = 0.0f32;
                     let mut hit = DWRITE_HIT_TEST_METRICS::default();
                     let _ = unsafe { layout.HitTestTextPosition(byte_to_utf16(&self.text, self.cursor_pos) as u32, false, &mut px, &mut py, &mut hit) };
@@ -1021,6 +1059,50 @@ impl Widget for MultilineTextInput {
     fn bounds(&self) -> D2D_RECT_F { self.r }
     fn text(&self) -> &str { &self.text }
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
+
+    fn on_ctrl_key(&mut self, vk: u32) -> bool {
+        match vk {
+            0x41 => {
+                if self.text.is_empty() { return true; }
+                self.sel_start = Some(0);
+                self.sel_end = self.text.len();
+                self.cursor_pos = self.text.len();
+                true
+            }
+            0x43 => {
+                if let Some((lo, hi)) = self.sel_range() {
+                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
+                }
+                true
+            }
+            0x56 => {
+                if let Some(text) = clipboard_paste() {
+                    if let Some((lo, hi)) = self.sel_range() {
+                        self.text.replace_range(lo..hi, &text);
+                        self.cursor_pos = lo + text.len();
+                        self.sel_start = None;
+                    } else {
+                        self.text.insert_str(self.cursor_pos, &text);
+                        self.cursor_pos += text.len();
+                    }
+                    self.scroll_hold.set(false);
+                }
+                true
+            }
+            0x58 => {
+                if let Some((lo, hi)) = self.sel_range() {
+                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
+                    self.text.replace_range(lo..hi, "");
+                    self.cursor_pos = lo;
+                    self.sel_start = None;
+                    self.scroll_hold.set(false);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn on_mouse_down(&mut self, x: f32, y: f32) {
         self.scroll_hold.set(false);
         if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
@@ -1656,5 +1738,62 @@ impl Widget for KeyBindingInput {
                 draw_text(&res.d2d, "🖊", &tf, &hint_r, &b);
             }
         }
+    }
+}
+
+// ── 剪贴板辅助 ────────────────────────────────────────────────
+
+#[link(name = "user32")]
+extern "system" {
+    fn OpenClipboard(hWnd: HWND) -> BOOL;
+    fn CloseClipboard() -> BOOL;
+    fn EmptyClipboard() -> BOOL;
+    fn SetClipboardData(uFormat: u32, hMem: HANDLE) -> HANDLE;
+    fn GetClipboardData(uFormat: u32) -> HANDLE;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> HANDLE;
+    fn GlobalLock(hMem: HANDLE) -> *mut std::ffi::c_void;
+    fn GlobalUnlock(hMem: HANDLE) -> BOOL;
+    fn GlobalFree(hMem: HANDLE) -> HANDLE;
+}
+
+const CF_UNICODETEXT: u32 = 13;
+const GMEM_MOVEABLE: u32 = 0x0002;
+
+pub fn clipboard_copy(text: &str) -> bool {
+    unsafe {
+        if OpenClipboard(HWND::default()) == BOOL(0) { return false; }
+        let _ = EmptyClipboard();
+        let ws: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let bytes = ws.len() * 2;
+        let h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if h == HANDLE::default() { let _ = CloseClipboard(); return false; }
+        let lock = GlobalLock(h);
+        if lock.is_null() { let _ = GlobalFree(h); let _ = CloseClipboard(); return false; }
+        std::ptr::copy_nonoverlapping(ws.as_ptr() as *const u8, lock as *mut u8, bytes);
+        let _ = GlobalUnlock(h);
+        let _ = SetClipboardData(CF_UNICODETEXT, h);
+        let _ = CloseClipboard();
+        true
+    }
+}
+
+pub fn clipboard_paste() -> Option<String> {
+    unsafe {
+        if OpenClipboard(HWND::default()) == BOOL(0) { return None; }
+        let h = GetClipboardData(CF_UNICODETEXT);
+        if h == HANDLE::default() { let _ = CloseClipboard(); return None; }
+        let lock = GlobalLock(h);
+        if lock.is_null() { let _ = CloseClipboard(); return None; }
+        let mut len = 0;
+        while *((lock as *const u16).add(len)) != 0 { len += 1; }
+        let slice = std::slice::from_raw_parts(lock as *const u16, len);
+        let s = String::from_utf16_lossy(slice);
+        let _ = GlobalUnlock(h);
+        let _ = CloseClipboard();
+        Some(s)
     }
 }

@@ -14,6 +14,11 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+#[link(name = "user32")]
+extern "system" {
+    fn GetKeyState(vk: i32) -> i16;
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn SetProcessWorkingSetSize(h: HANDLE, min: usize, max: usize) -> i32;
@@ -23,8 +28,9 @@ extern "system" {
 use crate::config;
 use crate::draw::*;
 use crate::plugin;
-use crate::state::*;
-use crate::tray;
+    use crate::state::*;
+    use crate::widget::{clipboard_copy, clipboard_paste};
+    use crate::tray;
 use crate::window::*;
 
 #[link(name = "imm32")]
@@ -336,6 +342,7 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_KEYDOWN => {
+            let ctrl = unsafe { (GetKeyState(0x11) as i16) < 0 };
             match wp.0 as u32 {
                 VK_ESCAPE => { hide_clear(h, s); return LRESULT(0); }
                 VK_RETURN => {
@@ -425,7 +432,39 @@ pub unsafe extern "system" fn wndproc(
                     let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     return LRESULT(0);
                 }
-                _ => return DefWindowProcW(h, msg, wp, lp),
+                _ => {
+                    if ctrl {
+                        match wp.0 as u32 {
+                            0x41 => { // Ctrl+A
+                                s.cursor_pos = s.input_text.len();
+                                let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                            }
+                            0x43 => { // Ctrl+C
+                                let _ = clipboard_copy(&s.input_text);
+                            }
+                            0x56 => { // Ctrl+V
+                                if let Some(text) = clipboard_paste() {
+                                    s.input_text.insert_str(s.cursor_pos, &text);
+                                    s.cursor_pos += text.len();
+                                    s.filter = s.input_text.clone();
+                                    fill_list(s, h);
+                                    let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                                }
+                            }
+                            0x58 => { // Ctrl+X
+                                let _ = clipboard_copy(&s.input_text);
+                                s.input_text.clear();
+                                s.cursor_pos = 0;
+                                s.filter = String::new();
+                                fill_list(s, h);
+                                let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                            }
+                            _ => return DefWindowProcW(h, msg, wp, lp),
+                        }
+                        return LRESULT(0);
+                    }
+                    return DefWindowProcW(h, msg, wp, lp);
+                }
             }
         }
 

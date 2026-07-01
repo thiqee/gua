@@ -159,9 +159,9 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            card_hdr("黑名单程序", &mut w, &mut y, cx, card_r);
+            card_hdr("黑名单程序（例: notepad.exe, calc.exe）", &mut w, &mut y, cx, card_r);
             let ct = y;
-            let mut bl_inp = MultilineTextInput::new(&sv(settings, "_blacklist", "notepad.exe, calc.exe"));
+            let mut bl_inp = MultilineTextInput::new(&sv(settings, "_blacklist", ""));
             bl_inp.settings_key = Some("_blacklist".to_string());
             bl_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 110.0 });
             w.push(Box::new(bl_inp));
@@ -169,9 +169,9 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            card_hdr("多音字追加读音", &mut w, &mut y, cx, card_r);
+            card_hdr("多音字追加读音（例: 了(le,liao);茄(qie)）", &mut w, &mut y, cx, card_r);
             let ct = y;
-            let mut py_inp = MultilineTextInput::new(&sv(settings, "_pinyin_overrides", "茄=qie, 了=le"));
+            let mut py_inp = MultilineTextInput::new(&sv(settings, "_pinyin_overrides", ""));
             py_inp.settings_key = Some("_pinyin_overrides".to_string());
             py_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 110.0 });
             w.push(Box::new(py_inp));
@@ -312,6 +312,8 @@ unsafe fn sync_settings_entries(s: &mut SettingsWin) {
         if let Some(key) = widget.settings_key() {
             if let Some(e) = s.settings.iter_mut().find(|e| e.key == key) {
                 e.value = widget.text().to_string();
+            } else {
+                s.settings.push(config::Entry { key: key.to_string(), value: widget.text().to_string(), category: None, description: None });
             }
         }
     }
@@ -1398,7 +1400,9 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     let _ = InvalidateRect(Some(h), None, true);
                 } else if let Some(idx) = s.focused_idx {
                     if idx < s.widgets.len() {
-                        if s.widgets[idx].on_key_down(vk) { let _ = InvalidateRect(Some(h), None, true); }
+                        if s.mod_held[0] {
+                            if s.widgets[idx].on_ctrl_key(vk) { let _ = InvalidateRect(Some(h), None, true); }
+                        } else if s.widgets[idx].on_key_down(vk) { let _ = InvalidateRect(Some(h), None, true); }
                     }
                 }
             }

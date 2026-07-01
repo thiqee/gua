@@ -307,14 +307,18 @@ pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
 pub fn cfg_pinyin_overrides(entries: &[config::Entry], key: &str) -> HashMap<char, Vec<String>> {
     let mut map: HashMap<char, Vec<String>> = HashMap::new();
     for entry in entries.iter().filter(|e| e.key == key) {
-        for part in entry.value.split(',') {
-            let part = part.trim().trim_matches('"').trim_matches('\'');
-            if let Some(pos) = part.find('=') {
-                let ch = part[..pos].trim().chars().next();
-                let py = part[pos + 1..].trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                if let Some(c) = ch {
+        for part in entry.value.split(';') {
+            let part = part.trim();
+            if part.is_empty() { continue; }
+            if let Some(paren_pos) = part.find('(') {
+                let ch = part[..paren_pos].trim().chars().next();
+                let inner = part[paren_pos + 1..].trim_end_matches(')').trim();
+                for py in inner.split(|c| c == ',' || c == '、') {
+                    let py = py.trim().to_lowercase();
                     if !py.is_empty() {
-                        map.entry(c).or_insert_with(Vec::new).push(py);
+                        if let Some(c) = ch {
+                            map.entry(c).or_default().push(py);
+                        }
                     }
                 }
             }

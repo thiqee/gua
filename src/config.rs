@@ -40,6 +40,8 @@ pub fn default_entries() -> Vec<Entry> {
         Entry { key: "_panel_position_x".into(),   value: "50".into(),              category: None, description: None },
         Entry { key: "_panel_position_y".into(),   value: "50".into(),              category: None, description: None },
         Entry { key: "_hotkey".into(),             value: "Alt+Space".into(),       category: None, description: None },
+        Entry { key: "_blacklist".into(),          value: "".into(),                category: None, description: None },
+        Entry { key: "_pinyin_overrides".into(),   value: "".into(),                category: None, description: None },
     ]
 }
 
