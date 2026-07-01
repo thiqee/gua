@@ -474,12 +474,15 @@ fn read_font_family(data: &[u8]) -> Option<String> {
         else { return None; };
     struct Rec { platform: u16, encoding: u16, lang: u16, offset: usize, length: usize }
     let mut candidates: Vec<Rec> = Vec::new();
+    let mut fallback1: Vec<Rec> = Vec::new();
     for i in 0..count {
         let r = name_record_off + i * 12;
         let platform = u16be(r)?; let encoding = u16be(r + 2)?; let lang = u16be(r + 4)?;
         let name_id = u16be(r + 6)?; let length = u16be(r + 8)? as usize; let offset = u16be(r + 10)? as usize;
-        if name_id == 1 { candidates.push(Rec { platform, encoding, lang, offset, length }); }
+        if name_id == 16 { candidates.push(Rec { platform, encoding, lang, offset, length }); }
+        if name_id == 1 { fallback1.push(Rec { platform, encoding, lang, offset, length }); }
     }
+    if candidates.is_empty() { candidates = fallback1; }
     for c in &candidates {
         if c.platform == 3 && c.lang == 0x0409 {
             let Some(start) = string_off.checked_add(c.offset) else { continue; };
@@ -522,7 +525,7 @@ pub fn load_private_fonts() -> Option<String> {
         fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
     }
     const FR_PRIVATE: u32 = 0x10;
-    let dir = std::fs::read_dir("fonts").ok()?;
+    let dir = std::fs::read_dir(config::config_dir().join("fonts")).ok()?;
     let cwd = std::env::current_dir().ok()?;
     let mut entries: Vec<_> = dir.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -569,7 +572,7 @@ pub fn load_private_fonts() -> Option<String> {
 }
 
 pub fn scan_font_families() -> Vec<String> {
-    let dir = match std::fs::read_dir("fonts") {
+    let dir = match std::fs::read_dir(config::config_dir().join("fonts")) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };

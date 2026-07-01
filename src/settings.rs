@@ -11,11 +11,14 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config;
+use crate::plugin;
 use crate::state::*;
 use crate::widget::*;
+use crate::window;
 
 #[link(name = "user32")]
 extern "system" {
@@ -64,6 +67,8 @@ pub struct SettingsWin {
     mod_held: [bool; 4],
     close_hovered: bool,
     save_hovered: bool,
+    cat_add_hovered: bool,
+    settings: Vec<config::Entry>,
     // 识别码 tab state
     codes_search: String,
     codes_version: usize,
@@ -73,6 +78,7 @@ pub struct SettingsWin {
     composing: String,
     cat_renaming: Option<usize>,
     cat_renaming_old: String,
+    save_msg: String,
 }
 
 #[allow(static_mut_refs)]
@@ -95,7 +101,7 @@ fn card_bg(cards: &mut Vec<D2D_RECT_F>, y: &mut f32, card_l: f32, card_r: f32, c
     cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: *y });
 }
 
-fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -> Vec<Box<dyn Widget>> {
+fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, settings: &[config::Entry]) -> Vec<Box<dyn Widget>> {
     cards.clear();
     let mut w: Vec<Box<dyn Widget>> = Vec::new();
 
@@ -112,48 +118,61 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
     let wide_l = 116.0;
     let tog_l = inner_l + inner_w - 48.0;
 
+    fn sv(settings: &[config::Entry], key: &str, default: &str) -> String {
+        settings.iter().find(|e| e.key == key).map(|e| e.value.clone()).unwrap_or_else(|| default.to_string())
+    }
+    fn sb(settings: &[config::Entry], key: &str, default: bool) -> bool {
+        settings.iter().find(|e| e.key == key).map(|e| e.value.eq_ignore_ascii_case("true") || e.value == "1").unwrap_or(default)
+    }
+
     match cat {
         0 => {
-            // ── 快捷键 ──
             card_hdr("快捷键", &mut w, &mut y, cx, card_r);
             let ct = y;
-            let mut kb = KeyBindingInput::new("Alt+Space");
+            let mut kb = KeyBindingInput::new(&sv(settings, "_hotkey", "Alt+Space"));
+            kb.settings_key = Some("_hotkey".to_string());
             kb.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 44.0 });
             w.push(Box::new(kb));
             y += 56.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 体验设置 ──
             card_hdr("体验设置", &mut w, &mut y, cx, card_r);
             let ct = y;
-            for (i, (label, checked)) in [("失去焦点自动隐藏", true), ("模糊匹配", true), ("拼音搜索", true)].iter().enumerate() {
+            let toggles = [
+                ("失去焦点自动隐藏", "_hide_on_focus_loss", sb(settings, "_hide_on_focus_loss", true)),
+                ("模糊匹配", "_fuzzy_match", sb(settings, "_fuzzy_match", true)),
+                ("拼音搜索", "_pinyin_search", sb(settings, "_pinyin_search", true)),
+                ("区分大小写", "_case_sensitive", sb(settings, "_case_sensitive", true)),
+            ];
+            for (i, (label, key, checked)) in toggles.iter().enumerate() {
                 let row_y = y + 10.0 + i as f32 * 38.0;
                 let mut lbl = Label::new(label);
                 lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inner_w - 56.0, bottom: row_y + 28.0 });
                 w.push(Box::new(lbl));
                 let mut sw = ToggleSwitch::new(*checked);
+                sw.settings_key = Some(key.to_string());
                 sw.set_bounds(D2D_RECT_F { left: tog_l, top: row_y, right: tog_l + 48.0, bottom: row_y + 28.0 });
                 w.push(Box::new(sw));
             }
-            y += 10.0 + 3.0 * 38.0 + 12.0;
+            y += 10.0 + 4.0 * 38.0 + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 黑名单程序 ──
             card_hdr("黑名单程序", &mut w, &mut y, cx, card_r);
             let ct = y;
-            let mut bl_inp = MultilineTextInput::new("notepad.exe, calc.exe");
+            let mut bl_inp = MultilineTextInput::new(&sv(settings, "_blacklist", "notepad.exe, calc.exe"));
+            bl_inp.settings_key = Some("_blacklist".to_string());
             bl_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 110.0 });
             w.push(Box::new(bl_inp));
             y += 10.0 + 100.0 + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 多音字追加读音 ──
             card_hdr("多音字追加读音", &mut w, &mut y, cx, card_r);
             let ct = y;
-            let mut py_inp = MultilineTextInput::new("茄=qie, 了=le");
+            let mut py_inp = MultilineTextInput::new(&sv(settings, "_pinyin_overrides", "茄=qie, 了=le"));
+            py_inp.settings_key = Some("_pinyin_overrides".to_string());
             py_inp.set_bounds(D2D_RECT_F { left: inner_l, top: y + 10.0, right: inner_l + inner_w, bottom: y + 110.0 });
             w.push(Box::new(py_inp));
             y += 10.0 + 100.0 + 12.0;
@@ -162,15 +181,21 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
         }
 
         1 => {
-            // ── 颜色 ──
             card_hdr("颜色", &mut w, &mut y, cx, card_r);
             let ct = y;
-            for (i, (label, val)) in [("背景色", "#1E1E1E"), ("输入框色", "#2A2A2A"), ("高亮色", "#4A6FA5"), ("文字色", "#CCCCCC")].iter().enumerate() {
+            let colors = [
+                ("背景色", "_theme_color", sv(settings, "_theme_color", "#1E1E1E")),
+                ("输入框色", "_input_bg_color", sv(settings, "_input_bg_color", "#2A2A2A")),
+                ("高亮色", "_accent_color", sv(settings, "_accent_color", "#4A6FA5")),
+                ("文字色", "_text_color", sv(settings, "_text_color", "#CCCCCC")),
+            ];
+            for (i, (label, key, val)) in colors.iter().enumerate() {
                 let row_y = y + 10.0 + i as f32 * 38.0;
                 let mut lbl = Label::new(label);
                 lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
                 w.push(Box::new(lbl));
                 let mut inp = TextInput::new(val);
+                inp.settings_key = Some(key.to_string());
                 inp.center = true;
                 inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
                 w.push(Box::new(inp));
@@ -179,17 +204,18 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 字体 ──
             card_hdr("字体", &mut w, &mut y, cx, card_r);
             let ct = y;
             let font_names = scan_font_families();
-            let s_main = unsafe { main_state() };
-            let current_font = if !s_main.is_null() { unsafe { (*s_main).font_name.clone() } } else { "Segoe UI".to_string() };
+            let current_font = sv(settings, "_font", "Segoe UI");
             let font_options = if font_names.is_empty() {
-                vec![current_font.clone()]
+                let mut v = vec![current_font.clone()];
+                if current_font != "Segoe UI" { v.push("Segoe UI".to_string()); }
+                v
             } else {
                 let mut opts = font_names;
                 if !opts.contains(&current_font) { opts.insert(0, current_font.clone()); }
+                if !opts.contains(&"Segoe UI".to_string()) { opts.push("Segoe UI".to_string()); }
                 opts
             };
             let row_y0 = y + 10.0;
@@ -197,14 +223,28 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
             lbl0.set_bounds(D2D_RECT_F { left: inner_l, top: row_y0, right: inner_l + inp_l - 8.0, bottom: row_y0 + 28.0 });
             w.push(Box::new(lbl0));
             let mut dd = Dropdown::new(&font_options, &current_font);
+            dd.settings_key = Some("_font".to_string());
             dd.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y0, right: inner_l + inp_l + inp_w, bottom: row_y0 + 28.0 });
             w.push(Box::new(dd));
-            for (i, (label, val)) in [("字号", "18"), ("状态栏字号", "12")].iter().enumerate() {
+            let mut ref_btn = RefreshButton::new();
+            ref_btn.set_bounds(D2D_RECT_F { left: inner_l + inp_l + inp_w + 4.0, top: row_y0, right: inner_l + inp_l + inp_w + 48.0, bottom: row_y0 + 28.0 });
+            w.push(Box::new(ref_btn));
+            let mut folder_btn = IconButton::new("📁");
+            folder_btn.bordered = true;
+            folder_btn.cmd = WidgetCmd::FontOpen;
+            folder_btn.set_bounds(D2D_RECT_F { left: inner_l + inp_l + inp_w + 52.0, top: row_y0, right: inner_l + inp_l + inp_w + 80.0, bottom: row_y0 + 28.0 });
+            w.push(Box::new(folder_btn));
+            let font_sizes = [
+                ("字号", "_font_size", sv(settings, "_font_size", "18")),
+                ("状态栏字号", "_status_font_size", sv(settings, "_status_font_size", "12")),
+            ];
+            for (i, (label, key, val)) in font_sizes.iter().enumerate() {
                 let row_y = y + 10.0 + (i + 1) as f32 * 38.0;
                 let mut lbl = Label::new(label);
                 lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
                 w.push(Box::new(lbl));
                 let mut inp = TextInput::new(val);
+                inp.settings_key = Some(key.to_string());
                 inp.center = true;
                 inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
                 w.push(Box::new(inp));
@@ -213,15 +253,23 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
-            // ── 布局 ──
             card_hdr("布局", &mut w, &mut y, cx, card_r);
             let ct = y;
-            for (i, (label, val)) in [("透明度", "255"), ("圆角大小", "12"), ("水平位置 (%)", "50"), ("垂直位置 (%)", "40"), ("宽度", "500"), ("最大显示限制", "8")].iter().enumerate() {
+            let layout = [
+                ("透明度", "_opacity", sv(settings, "_opacity", "255")),
+                ("圆角大小", "_round_corner", sv(settings, "_round_corner", "12")),
+                ("水平位置 (%)", "_panel_position_x", sv(settings, "_panel_position_x", "50")),
+                ("垂直位置 (%)", "_panel_position_y", sv(settings, "_panel_position_y", "40")),
+                ("宽度", "_width", sv(settings, "_width", "500")),
+                ("最大显示限制", "_max_results", sv(settings, "_max_results", "8")),
+            ];
+            for (i, (label, key, val)) in layout.iter().enumerate() {
                 let row_y = y + 10.0 + i as f32 * 38.0;
                 let mut lbl = Label::new(label);
                 lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
                 w.push(Box::new(lbl));
                 let mut inp = TextInput::new(val);
+                inp.settings_key = Some(key.to_string());
                 inp.center = true;
                 inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
                 w.push(Box::new(inp));
@@ -232,8 +280,6 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32) -
         }
 
         _ => {
-            // 识别码 tab is built separately via build_codes_tab
-            // Return empty - will be rebuilt in WM_PAINT
             *content_h = y;
             return w;
         }
@@ -258,6 +304,125 @@ unsafe fn sync_codes_entries(s: &SettingsWin) {
                 state.entries[gi].description = if desc.is_empty() { None } else { Some(desc) };
             }
         }
+    }
+}
+
+unsafe fn sync_settings_entries(s: &mut SettingsWin) {
+    for widget in &s.widgets {
+        if let Some(key) = widget.settings_key() {
+            if let Some(e) = s.settings.iter_mut().find(|e| e.key == key) {
+                e.value = widget.text().to_string();
+            }
+        }
+    }
+}
+
+unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
+    sync_settings_entries(s);
+    if s.cat == 2 { sync_codes_entries(s); }
+    config::save_settings(&s.settings);
+    let sm = main_state();
+    if sm.is_null() {
+        if destroy { SETTINGS = None; let _ = DestroyWindow(h); }
+        return;
+    }
+    config::save_codes(&(*sm).entries);
+
+    // 状态更新段 — 可能因 D2D/DWrite 设备异常 panic，用 catch_unwind 保护
+    let settings = s.settings.clone();
+    let state_ptr = sm;
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let state = &mut *state_ptr;
+        let cs = |key: &str, def: &str| -> String {
+            settings.iter().find(|e| e.key == key).map(|e| e.value.clone()).unwrap_or_else(|| def.to_string())
+        };
+
+        let new_font = cs("_font", &state.font_name);
+        let new_font_size = cfg_f32(&settings, "_font_size", state.font_size);
+        let new_status_fs = cfg_f32(&settings, "_status_font_size", state.status_font_size);
+    if state.font_name != new_font || (state.font_size - new_font_size).abs() > 0.5 || (state.status_font_size - new_status_fs).abs() > 0.1 {
+        state.font_name = new_font;
+        state.font_size = new_font_size;
+        state.status_font_size = new_status_fs;
+        window::rebuild_text_format(state);
+    }
+    state.max_results = cfg_usize(&settings, "_max_results", state.max_results);
+    state.width = cfg_i32(&settings, "_width", state.width);
+    state.round_corner = cfg_i32(&settings, "_round_corner", state.round_corner);
+    state.hide_on_focus_loss = cfg_bool(&settings, "_hide_on_focus_loss", state.hide_on_focus_loss);
+
+    let old_theme = state.theme_color;
+    let old_input_bg = state.input_bg_color;
+    let old_accent = state.accent_color;
+    let old_text = state.text_color;
+    let old_opacity = state.opacity;
+    state.theme_color = cfg_color(&settings, "_theme_color", state.theme_color);
+    state.input_bg_color = cfg_color(&settings, "_input_bg_color", state.input_bg_color);
+    state.accent_color = cfg_color(&settings, "_accent_color", state.accent_color);
+    state.text_color = cfg_color(&settings, "_text_color", state.text_color);
+    state.opacity = cfg_usize(&settings, "_opacity", state.opacity as usize).min(255) as u8;
+    if old_theme != state.theme_color || old_opacity != state.opacity {
+        if let Some(ref brush) = state.theme_brush {
+            let c = color_to_d2d(state.theme_color, state.opacity as f32 / 255.0);
+            brush.SetColor(&c as *const _);
+        }
+    }
+    if old_input_bg != state.input_bg_color || old_opacity != state.opacity {
+        if let Some(ref brush) = state.input_bg_brush {
+            let c = color_to_d2d(state.input_bg_color, state.opacity as f32 / 255.0);
+            brush.SetColor(&c as *const _);
+        }
+    }
+    if old_accent != state.accent_color {
+        if let Some(ref brush) = state.accent_brush {
+            let c = color_to_d2d(state.accent_color, 1.0);
+            brush.SetColor(&c as *const _);
+        }
+    }
+    if old_text != state.text_color {
+        if let Some(ref brush) = state.text_brush {
+            let c = color_to_d2d(state.text_color, 1.0);
+            brush.SetColor(&c as *const _);
+        }
+    }
+
+    state.case_sensitive = cfg_bool(&settings, "_case_sensitive", state.case_sensitive);
+    state.fuzzy_enabled = cfg_bool(&settings, "_fuzzy_match", state.fuzzy_enabled);
+    state.pinyin_enabled = cfg_bool(&settings, "_pinyin_search", state.pinyin_enabled);
+    state.panel_ratio_x = cfg_f32(&settings, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
+    state.panel_ratio_y = cfg_f32(&settings, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
+    state.blacklist = cfg_blacklist(&settings, "_blacklist");
+    state.pinyin_overrides = cfg_pinyin_overrides(&settings, "_pinyin_overrides");
+
+    // 热键
+    let new_hotkey = cs("_hotkey", "Alt+Space");
+    if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey) {
+        if new_mod != state.mod_keys || new_vk != state.hotkey_vk {
+            let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+            let _ = UnregisterHotKey(main_hwnd, HOTKEY_ID);
+            if RegisterHotKey(main_hwnd, HOTKEY_ID, new_mod, new_vk).as_bool() {
+                state.mod_keys = new_mod;
+                state.hotkey_vk = new_vk;
+            } else {
+                let _ = RegisterHotKey(main_hwnd, HOTKEY_ID, state.mod_keys, state.hotkey_vk);
+            }
+        }
+    }
+
+    // 插件
+    let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    let plugin_cfgs = config::build_plugin_configs(&settings);
+    plugin::load_all(main_hwnd, &plugin_cfgs);
+    }));
+
+    // 提示（闭包外，不受 catch_unwind 影响）
+    s.save_msg = "保存成功".to_string();
+    let _ = SetTimer(Some(h), 100, 1500, None);
+    let _ = InvalidateRect(Some(h), None, true);
+
+    if destroy {
+        SETTINGS = None;
+        let _ = DestroyWindow(h);
     }
 }
 
@@ -323,6 +488,9 @@ unsafe fn build_codes_tab(
     if let Some(pos) = cat_map.iter().position(|(n, _)| n == "未分类") {
         let uncat = cat_map.remove(pos);
         cat_map.push(uncat);
+    }
+    if cat_map.is_empty() && !search_active {
+        cat_map.push(("未分类".to_string(), vec![]));
     }
     // Restore expand state from AppState
     let sm = main_state();
@@ -428,9 +596,8 @@ unsafe fn build_codes_tab(
         y += 4.0;
     }
 
-    if cat_map.is_empty() {
-        let txt = if search_active { "无匹配的识别码" } else { "暂无识别码" };
-        let mut lbl = Label::new(txt);
+    if search_active && cat_map.is_empty() {
+        let mut lbl = Label::new("无匹配的识别码");
         lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w, bottom: y + 24.0 });
         w.push(Box::new(lbl));
         y += 30.0;
@@ -507,13 +674,14 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         cat: 0, sel_cat: 99, scroll_y: 0.0, content_h: 0.0,
         focused_idx: None, capturing_hotkey: false,
         mod_held: [false; 4],
-        close_hovered: false, save_hovered: false,
+        close_hovered: false, save_hovered: false, cat_add_hovered: false, settings: config::load_settings(),
         codes_search: String::new(), codes_version: 0,
         cat_expanded: Vec::new(),
         scroll_dragging: false, scroll_drag_start_y: 0.0,
         composing: String::new(),
         cat_renaming: None,
         cat_renaming_old: String::new(),
+        save_msg: String::new(),
     };
     SETTINGS = Some(win);
     let _ = ShowWindow(hwnd_s, SW_SHOW);
@@ -594,15 +762,7 @@ unsafe fn clear_focus(s: &mut SettingsWin) {
 pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_CLOSE => {
-            if let Some(s) = &mut SETTINGS {
-                if s.cat == 2 { sync_codes_entries(s); }
-            }
-            let sm = main_state();
-            if !sm.is_null() {
-                config::save(config::config_path(), &(*sm).entries);
-            }
-            SETTINGS = None;
-            let _ = DestroyWindow(h);
+            if let Some(s) = &mut SETTINGS { do_save(s, h, true); }
             return LRESULT(0);
         }
 
@@ -619,6 +779,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if s.codes_version > 0 { need_rebuild = true; s.codes_version = 0; }
             }
             if need_rebuild {
+                sync_settings_entries(s);
                 if s.cat == 2 { sync_codes_entries(s); }
                 let was_cat_switch = s.sel_cat != s.cat;
                 s.sel_cat = s.cat;
@@ -631,7 +792,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded, &s.cat_renaming, &s.cat_renaming_old);
                     s.widgets = widgets;
                 } else {
-                    s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h);
+                    s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h, &s.settings);
                 }
                 if let Some(idx) = restore_focus {
                     if idx < s.widgets.len() {
@@ -753,6 +914,27 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let close_l = S_W as f32 - 20.0 - 80.0 * 2.0 - 8.0;
             let save_l = S_W as f32 - 20.0 - 80.0;
 
+            if s.cat == 2 {
+                let add_cat_l = CONTENT_L + 14.0;
+                let add_cat_r = add_cat_l + 100.0;
+                let acbr = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: add_cat_l, top: bty, right: add_cat_r, bottom: bby }, radiusX: 4.0, radiusY: 4.0 };
+                let bc = if s.cat_add_hovered { (0.29, 0.53, 0.80) } else { (0.40, 0.40, 0.40) };
+                if let Some(b) = mk_brush_(&s.d2d_context, bc.0, bc.1, bc.2, 1.0) {
+                    s.d2d_context.DrawRoundedRectangle(&acbr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>);
+                }
+                if let Some(ref dwf) = dwf {
+                    let f2 = to_w("Microsoft YaHei"); let l2 = to_w("en-us");
+                    if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f2.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l2.as_ptr())) {
+                        let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                        let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                        let tc = if s.cat_add_hovered { 0.85 } else { 0.55 };
+                        if let Some(b) = mk_brush_(&s.d2d_context, tc, tc, tc, 1.0) {
+                            s.d2d_context.DrawText(&to_w("+ 添加分类"), &tf, &acbr.rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+                        }
+                    }
+                }
+            }
+
             let cbr = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: close_l, top: bty, right: close_l + 80.0, bottom: bby }, radiusX: 6.0, radiusY: 6.0 };
             let (cr, cg, cb) = if s.close_hovered { (0.65, 0.20, 0.15) } else { (0.35, 0.35, 0.35) };
             if let Some(b) = mk_brush_(&s.d2d_context, cr, cg, cb, 1.0) { s.d2d_context.FillRoundedRectangle(&cbr as *const _, &b); }
@@ -781,9 +963,45 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 }
             }
 
+            if !s.save_msg.is_empty() {
+                let msg_w = 120.0;
+                let msg_l = (S_W as f32 - msg_w) / 2.0;
+                let msg_rect = D2D_RECT_F { left: msg_l, top: bty, right: msg_l + msg_w, bottom: bby };
+                if let Some(ref dwf) = dwf {
+                    let f5 = to_w("Microsoft YaHei"); let l5 = to_w("en-us");
+                    if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f5.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l5.as_ptr())) {
+                        let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                        let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                        if let Some(b) = mk_brush_(&s.d2d_context, 0.3, 0.8, 0.3, 1.0) {
+                            s.d2d_context.DrawText(&to_w(&s.save_msg), &tf, &msg_rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+                        }
+                    }
+                }
+            }
+
             let _ = s.d2d_context.EndDraw(None, None);
             let _ = s.swap_chain.Present(0, DXGI_PRESENT(0));
             let _ = EndPaint(h, &ps);
+            return LRESULT(0);
+        }
+
+        WM_TIMER if wp.0 as usize == 100 => {
+            if let Some(s) = &mut SETTINGS { s.save_msg.clear(); }
+            let _ = KillTimer(Some(h), 100);
+            let _ = InvalidateRect(Some(h), None, true);
+            return LRESULT(0);
+        }
+
+        WM_TIMER if wp.0 as usize == 101 => {
+            if let Some(s) = &mut SETTINGS {
+                let mut need_paint = false;
+                for w in &mut s.widgets { if w.tick() { need_paint = true; } }
+                if need_paint {
+                    let _ = InvalidateRect(Some(h), None, true);
+                } else {
+                    let _ = KillTimer(Some(h), 101);
+                }
+            }
             return LRESULT(0);
         }
 
@@ -796,25 +1014,39 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let close_l = S_W as f32 - 20.0 - 80.0 * 2.0 - 8.0;
                 let save_l = S_W as f32 - 20.0 - 80.0;
 
-                if x >= close_l && x <= close_l + 80.0 && y >= bty && y <= bby {
-                    if s.cat == 2 { sync_codes_entries(s); }
-                    let sm = main_state();
-                    if !sm.is_null() {
-                        config::save(config::config_path(), &(*sm).entries);
-                    }
-                    SETTINGS = None;
-                    let _ = DestroyWindow(h);
-                    return LRESULT(0);
-                }
-                if x >= save_l && x <= save_l + 80.0 && y >= bty && y <= bby {
-                    if s.cat == 2 { sync_codes_entries(s); }
-                    let sm = main_state();
-                    if !sm.is_null() {
-                        config::save(config::config_path(), &(*sm).entries);
+                let add_cat_l = CONTENT_L + 14.0;
+                let add_cat_r = add_cat_l + 100.0;
+                if x >= add_cat_l && x <= add_cat_r && y >= bty && y <= bby {
+                    if s.cat == 2 {
+                        sync_codes_entries(s);
+                        let s_main = main_state();
+                        if !s_main.is_null() {
+                            let state = &mut *s_main;
+                            let mut i = 0;
+                            let new_name = loop {
+                                let name = if i == 0 { "新分类".to_string() } else { format!("新分类{}", i) };
+                                let exists = state.entries.iter().any(|e| e.category.as_deref() == Some(&name));
+                                if !exists { break name; }
+                                i += 1;
+                            };
+                            state.entries.push(config::Entry { key: "新识别码".into(), value: String::new(), category: Some(new_name), description: None });
+                        }
+                        s.codes_version += 1;
+                        let _ = InvalidateRect(Some(h), None, true);
                     }
                     return LRESULT(0);
                 }
 
+                if x >= close_l && x <= close_l + 80.0 && y >= bty && y <= bby {
+                    do_save(s, h, true);
+                    return LRESULT(0);
+                }
+                if x >= save_l && x <= save_l + 80.0 && y >= bty && y <= bby {
+                    do_save(s, h, false);
+                    return LRESULT(0);
+                }
+
+                if y >= bty && y <= bby { return LRESULT(0); }
                 // ── 滚动条拖拽 ──
                 let track_l = S_W as f32 - 14.0;
                 let track_t = TITLE_H + 4.0;
@@ -840,6 +1072,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
                         let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + 38.0 };
                         if x >= btn.left && x <= btn.right && y >= btn.top && y <= btn.bottom {
+                            sync_settings_entries(s);
                             if s.cat == 2 { sync_codes_entries(s); }
                             clear_focus(s);
                             s.cat = i;
@@ -986,6 +1219,29 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                 _ => {}
                             }
                         }
+                        if handled_idx < s.widgets.len() {
+                            match s.widgets[handled_idx].cmd() {
+                                WidgetCmd::FontRefresh => {
+                                    let font_names = crate::state::scan_font_families();
+                                    let current_font = s.widgets.iter().find(|w| w.settings_key() == Some("_font")).map(|w| w.text().to_string()).unwrap_or_default();
+                                    let mut opts = font_names;
+                                    if !opts.contains(&current_font) { opts.insert(0, current_font.clone()); }
+                                    if let Some(dd_w) = s.widgets.iter_mut().find(|w| w.settings_key() == Some("_font")) {
+                                        if let Some(d) = dd_w.as_any_mut().downcast_mut::<Dropdown>() {
+                                            d.set_options(opts);
+                                        }
+                                    }
+                                    let _ = SetTimer(Some(h), 101, 50, None);
+                                    let _ = InvalidateRect(Some(h), None, true);
+                                }
+                                WidgetCmd::FontOpen => {
+                                    let dir = config::config_dir().join("fonts");
+                                    let p = to_w(&dir.to_string_lossy());
+                                    let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
+                                }
+                                _ => {}
+                            }
+                        }
                         // Non-focusable click → clear focus
                         if !s.widgets[handled_idx].focused() {
                             if let Some(oi) = old_idx {
@@ -1049,9 +1305,14 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let sl = S_W as f32 - 20.0 - bw2;
                 let close_hit = x >= cl && x <= cl + bw2 && y >= bty && y <= bby;
                 let save_hit = x >= sl && x <= sl + bw2 && y >= bty && y <= bby;
-                if close_hit != s.close_hovered || save_hit != s.save_hovered {
+                let cat_add_hit = s.cat == 2 && {
+                    let add_cat_l = CONTENT_L + 14.0;
+                    x >= add_cat_l && x <= add_cat_l + 100.0 && y >= bty && y <= bby
+                };
+                if close_hit != s.close_hovered || save_hit != s.save_hovered || cat_add_hit != s.cat_add_hovered {
                     s.close_hovered = close_hit;
                     s.save_hovered = save_hit;
+                    s.cat_add_hovered = cat_add_hit;
                     let _ = InvalidateRect(Some(h), None, true);
                 }
                 for w in &mut s.widgets { w.on_mouse_move(x, adj_y); }

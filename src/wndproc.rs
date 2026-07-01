@@ -320,8 +320,8 @@ pub unsafe extern "system" fn wndproc(
                     return LRESULT(0);
                 }
                 IDM_OPEN_CONFIG => {
-                    let cfg = config::config_path();
-                    let p: Vec<u16> = cfg.to_string_lossy().encode_utf16().collect();
+                    let dir = config::config_dir();
+                    let p = to_w(&dir.to_string_lossy());
                     let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
                     return LRESULT(0);
                 }

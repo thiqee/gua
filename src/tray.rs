@@ -102,9 +102,8 @@ pub unsafe fn show_menu(hwnd: HWND) {
         _ => return,
     };
 
-    let _ = AppendMenuW(menu, MF_STRING, IDM_TOGGLE as usize, w!("打开 Gua"));
     let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS as usize, w!("设置"));
-    let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("打开配置文件"));
+    let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("配置文件夹"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
     let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT as usize, w!("退出"));
 

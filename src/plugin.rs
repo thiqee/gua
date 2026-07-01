@@ -4,10 +4,20 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::fs;
+use std::io::Write;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::config;
 use crate::state::to_w;
+
+fn plog(msg: &str) {
+    let path = config::config_dir().join("panic.log");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "plugin: {msg}");
+    }
+}
 
 // ── Win32 extern ──────────────────────────────────────────────
 
@@ -117,9 +127,11 @@ thread_local! {
 unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i32 {
     let idx = CURRENT_PLUGIN_IDX.get();
     if idx == usize::MAX {
+        plog("register_hotkey: 不在插件上下文中");
         return -1;
     }
     if user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+        plog(&format!("register_hotkey: user_id {} 超出范围", user_id));
         return -1;
     }
     {
@@ -130,8 +142,10 @@ unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i
     }
     let internal_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + user_id;
     if !RegisterHotKey(gua_hwnd(), internal_id, mods, vk).as_bool() {
+        plog(&format!("register_hotkey: RegisterHotKey 失败 mods={} vk={}", mods, vk));
         return -1;
     }
+    plog(&format!("register_hotkey: 成功 mods={} vk={} user_id={} internal_id={}", mods, vk, user_id, internal_id));
     let plugins = PLUGINS.w();
     plugins[idx].user_to_internal.insert(user_id, internal_id);
     plugins[idx].internal_to_user.insert(internal_id, user_id);
@@ -258,14 +272,7 @@ pub unsafe fn load_all(
     *TIMER_MAP.w() = Some(HashMap::new());
     *PLUGINS.w() = Vec::new();
 
-    // 基于 exe 路径定位 plugins/ 目录
-    let plugin_dir = match get_exe_dir() {
-        Some(d) => d.join("plugins"),
-        None => {
-            eprintln!("plugin: 无法获取 exe 路径");
-            return;
-        }
-    };
+    let plugin_dir = config::config_dir().join("plugins");
     if !plugin_dir.is_dir() {
         return;
     }
@@ -293,21 +300,23 @@ pub unsafe fn load_all(
             continue;
         }
 
+        plog(&format!("发现DLL: {}", file_stem));
         let full_path = to_w(&path.to_string_lossy());
         let lib = LoadLibraryW(full_path.as_ptr());
         if lib.is_null() {
-            eprintln!("plugin: 加载 {} 失败", file_stem);
+            plog(&format!("{}: LoadLibraryW 失败", file_stem));
             continue;
         }
+        plog(&format!("{}: LoadLibraryW 成功", file_stem));
 
-        // 查找 gua_plugin_load 导出函数
         let load_fn_name = b"gua_plugin_load\0";
         let proc = GetProcAddress(lib, load_fn_name.as_ptr());
         if proc.is_none() {
-            eprintln!("plugin: {} 缺少 gua_plugin_load 导出", file_stem);
+            plog(&format!("{}: 缺少 gua_plugin_load 导出", file_stem));
             let _ = FreeLibrary(lib);
             continue;
         }
+        plog(&format!("{}: 找到 gua_plugin_load", file_stem));
         let load_fn: GuaPluginLoadFn = std::mem::transmute(proc.unwrap());
 
         // 构造 GuaApi（泄漏到堆上，插件持有 &'static 引用）
@@ -337,18 +346,21 @@ pub unsafe fn load_all(
 
         let idx = PLUGINS.r().len();
         CURRENT_PLUGIN_IDX.set(idx);
+        plog(&format!("{}: 调用 gua_plugin_load...", file_stem));
 
         let ret = load_fn(gua_api as *const GuaApi, &mut vtable as *mut PluginVtable);
 
         CURRENT_PLUGIN_IDX.set(usize::MAX);
+        plog(&format!("{}: gua_plugin_load 返回 ret={}", file_stem, ret));
 
         if ret != 0 || vtable.name.is_null() {
-            eprintln!("plugin: {} 初始化失败 (ret={})", file_stem, ret);
+            plog(&format!("{}: 初始化失败 (ret={})", file_stem, ret));
             let _ = FreeLibrary(lib);
             continue;
         }
 
         let name_str = CStr::from_ptr(vtable.name).to_string_lossy().to_string();
+        plog(&format!("{}: 名称=\"{}\" has_init={}", file_stem, name_str, vtable.init.is_some()));
         if vtable.vtable_size > std::mem::size_of::<PluginVtable>() as u32 {
             vtable.vtable_size = std::mem::size_of::<PluginVtable>() as u32;
         }
@@ -359,7 +371,7 @@ pub unsafe fn load_all(
             .and_then(|c| c.get("enabled"))
             .map_or(false, |v| v == "false")
         {
-            eprintln!("plugin: {} 已禁用", name_str);
+            plog(&format!("{} 已禁用", name_str));
             let _ = FreeLibrary(lib);
             CURRENT_PLUGIN_IDX.set(usize::MAX);
             continue;
@@ -375,8 +387,9 @@ pub unsafe fn load_all(
 
         CURRENT_PLUGIN_IDX.set(usize::MAX);
 
-        // 调用 init（设置 CURRENT_PLUGIN_IDX 以便 init 中调用 register_hotkey）
+        // 调用 init
         CURRENT_PLUGIN_IDX.set(idx);
+        plog(&format!("{}: 调用 init...", name_str));
         let init_result = std::panic::catch_unwind(|| {
             let init_fn = PLUGINS.r()[idx].vtable.init;
             if let Some(f) = init_fn {
@@ -388,14 +401,14 @@ pub unsafe fn load_all(
         CURRENT_PLUGIN_IDX.set(usize::MAX);
 
         match init_result {
-            Ok(0) => {}
+            Ok(0) => { plog(&format!("{}: init 成功", name_str)); }
             Ok(r) => {
-                eprintln!("plugin: {} init 返回非零 {}", name_str, r);
+                plog(&format!("{}: init 返回非零 {}", name_str, r));
                 cleanup_plugin(idx);
                 continue;
             }
             Err(_) => {
-                eprintln!("plugin: {} init 发生 panic", name_str);
+                plog(&format!("{}: init 发生 panic", name_str));
                 cleanup_plugin(idx);
                 continue;
             }
@@ -404,7 +417,7 @@ pub unsafe fn load_all(
 
     let count = PLUGINS.r().len();
     if count > 0 {
-        eprintln!("plugin: 已加载 {} 个插件", count);
+        plog(&format!("已加载 {} 个插件", count));
     }
 }
 
@@ -438,6 +451,7 @@ pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
     for i in 0..plugins.len() {
         if plugins[i].internal_to_user.contains_key(&internal_id) {
             let user_id = plugins[i].internal_to_user[&internal_id];
+            plog(&format!("dispatch_hotkey: 插件[{}] user_id={}", i, user_id));
             let f = plugins[i].vtable.on_hotkey;
             CURRENT_PLUGIN_IDX.set(i);
             let _ = std::panic::catch_unwind(|| {

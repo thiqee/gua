@@ -44,7 +44,7 @@ fn main() -> Result<()> {
 
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {}\n", info);
-        let _ = std::fs::write("panic.log", &msg);
+        let _ = std::fs::write(config::config_dir().join("panic.log"), &msg);
     }));
 
     unsafe {
@@ -53,44 +53,43 @@ fn main() -> Result<()> {
         let dpi = GetDeviceCaps(Some(screen_dc), LOGPIXELSY);
         let _ = ReleaseDC(None, screen_dc);
 
-        let cfg_path = config::config_path();
-        let raw_entries = config::load(&cfg_path);
-        let has_explicit_font = raw_entries.iter().any(|e| e.key == "_font");
+        let settings = config::load_settings();
+        let has_explicit_font = settings.iter().any(|e| e.key == "_font");
         let private_font_name = load_private_fonts();
         let font_name = if !has_explicit_font {
-            private_font_name.unwrap_or_else(|| cfg_str(&raw_entries, "_font", "Segoe UI"))
+            private_font_name.unwrap_or_else(|| cfg_str(&settings, "_font", "Segoe UI"))
         } else {
-            cfg_str(&raw_entries, "_font", "Segoe UI")
+            cfg_str(&settings, "_font", "Segoe UI")
         };
-        let font_size = cfg_f32(&raw_entries, "_font_size", FW);
-        let width = cfg_i32(&raw_entries, "_width", WW);
-        let max_results = cfg_usize(&raw_entries, "_max_results", MV);
-        let round_corner = cfg_i32(&raw_entries, "_round_corner", 12);
-        let opacity = cfg_usize(&raw_entries, "_opacity", 255).min(255) as u8;
-        let case_sensitive = cfg_bool(&raw_entries, "_case_sensitive", true);
-        let fuzzy_enabled = cfg_bool(&raw_entries, "_fuzzy_match", FUZZY_MATCH_DEFAULT);
-        let pinyin_enabled = cfg_bool(&raw_entries, "_pinyin_search", PINYIN_SEARCH_DEFAULT);
-        let pinyin_overrides = cfg_pinyin_overrides(&raw_entries, "_pinyin_overrides");
-        let hide_on_focus_loss = cfg_bool(&raw_entries, "_hide_on_focus_loss", true);
-        let theme_color = cfg_color(&raw_entries, "_theme_color", 0x1E1E1E);
-        let input_bg_color = cfg_color(&raw_entries, "_input_bg_color", 0x2A2A2A);
-        let accent_color = cfg_color(&raw_entries, "_accent_color", 0x4A6FA5);
-        let text_color = cfg_color(&raw_entries, "_text_color", 0xCCCCCC);
-        let status_font_size = cfg_f32(&raw_entries, "_status_font_size", 12.0);
-        let panel_ratio_x = cfg_f32(&raw_entries, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
-        let panel_ratio_y = cfg_f32(&raw_entries, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
-        let hotkey_str = cfg_str(&raw_entries, "_hotkey", "Alt+Space");
+        let font_size = cfg_f32(&settings, "_font_size", FW);
+        let width = cfg_i32(&settings, "_width", WW);
+        let max_results = cfg_usize(&settings, "_max_results", MV);
+        let round_corner = cfg_i32(&settings, "_round_corner", 12);
+        let opacity = cfg_usize(&settings, "_opacity", 255).min(255) as u8;
+        let case_sensitive = cfg_bool(&settings, "_case_sensitive", true);
+        let fuzzy_enabled = cfg_bool(&settings, "_fuzzy_match", FUZZY_MATCH_DEFAULT);
+        let pinyin_enabled = cfg_bool(&settings, "_pinyin_search", PINYIN_SEARCH_DEFAULT);
+        let pinyin_overrides = cfg_pinyin_overrides(&settings, "_pinyin_overrides");
+        let hide_on_focus_loss = cfg_bool(&settings, "_hide_on_focus_loss", true);
+        let theme_color = cfg_color(&settings, "_theme_color", 0x1E1E1E);
+        let input_bg_color = cfg_color(&settings, "_input_bg_color", 0x2A2A2A);
+        let accent_color = cfg_color(&settings, "_accent_color", 0x4A6FA5);
+        let text_color = cfg_color(&settings, "_text_color", 0xCCCCCC);
+        let status_font_size = cfg_f32(&settings, "_status_font_size", 12.0);
+        let panel_ratio_x = cfg_f32(&settings, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
+        let panel_ratio_y = cfg_f32(&settings, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
+        let hotkey_str = cfg_str(&settings, "_hotkey", "Alt+Space");
         let (mod_keys, hotkey_vk) = match parse_hotkey(&hotkey_str) {
             Some(v) => v,
             None => {
                 eprintln!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space");
-                let _ = std::fs::write("panic.log", format!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space\n"));
+                let _ = std::fs::write(config::config_dir().join("panic.log"), format!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space\n"));
                 (MOD_ALT, VK_SPACE)
             }
         };
-        let blacklist = cfg_blacklist(&raw_entries, "_blacklist");
-        let plugin_configs = config::build_plugin_configs(&raw_entries);
-        let entries: Vec<config::Entry> = raw_entries.into_iter().filter(|e| !e.key.starts_with('_')).collect();
+        let blacklist = cfg_blacklist(&settings, "_blacklist");
+        let plugin_configs = config::build_plugin_configs(&settings);
+        let entries = config::load_codes();
 
         let inst = GetModuleHandleW(None)?;
         let cn = to_w("Gua");

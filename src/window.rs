@@ -193,6 +193,9 @@ pub unsafe fn rebuild_text_format(s: &mut AppState) {
     let status_font_size = s.status_font_size;
     s.text_format = make_text_format(factory, &family, &locale, font_size);
     s.status_text_format = make_text_format(factory, &family, &locale, status_font_size);
+    if let Some(ref tf) = s.status_text_format {
+        let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
 }
 
 unsafe fn make_text_format(factory: *const IDWriteFactory, family: &[u16], locale: &[u16], sz: f32) -> Option<IDWriteTextFormat> {
@@ -321,44 +324,44 @@ pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
 
 /// 热重载配置
 pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
-    let cfg_path = config::config_path();
-    let cur = std::fs::metadata(&cfg_path)
+    let set_path = config::settings_path();
+    let cur = std::fs::metadata(&set_path)
         .ok()
         .and_then(|m| m.modified().ok());
     let mut font_name = s.font_name.clone();
     let mut font_size = s.font_size;
     let config_changed = s.config_mtime != cur;
     if config_changed {
-        let raw = config::load(&cfg_path);
-        let has_explicit_font = raw.iter().any(|e| e.key == "_font");
+        let settings = config::load_settings();
+        let has_explicit_font = settings.iter().any(|e| e.key == "_font");
         let private_font_name = load_private_fonts();
         font_name = if has_explicit_font {
-            cfg_str(&raw, "_font", &s.font_name)
+            cfg_str(&settings, "_font", &s.font_name)
         } else {
-            private_font_name.unwrap_or_else(|| cfg_str(&raw, "_font", &s.font_name))
+            private_font_name.unwrap_or_else(|| cfg_str(&settings, "_font", &s.font_name))
         };
-        font_size = cfg_f32(&raw, "_font_size", s.font_size);
-        s.max_results = cfg_usize(&raw, "_max_results", s.max_results);
-        s.width = cfg_i32(&raw, "_width", s.width);
-        s.round_corner = cfg_i32(&raw, "_round_corner", s.round_corner);
-        s.hide_on_focus_loss = cfg_bool(&raw, "_hide_on_focus_loss", s.hide_on_focus_loss);
+        font_size = cfg_f32(&settings, "_font_size", s.font_size);
+        s.max_results = cfg_usize(&settings, "_max_results", s.max_results);
+        s.width = cfg_i32(&settings, "_width", s.width);
+        s.round_corner = cfg_i32(&settings, "_round_corner", s.round_corner);
+        s.hide_on_focus_loss = cfg_bool(&settings, "_hide_on_focus_loss", s.hide_on_focus_loss);
         let old_theme = s.theme_color;
         let old_input_bg = s.input_bg_color;
         let old_accent = s.accent_color;
         let old_text = s.text_color;
         let old_opacity = s.opacity;
-        s.theme_color = cfg_color(&raw, "_theme_color", s.theme_color);
-        s.input_bg_color = cfg_color(&raw, "_input_bg_color", s.input_bg_color);
-        s.accent_color = cfg_color(&raw, "_accent_color", s.accent_color);
-        s.text_color = cfg_color(&raw, "_text_color", s.text_color);
+        s.theme_color = cfg_color(&settings, "_theme_color", s.theme_color);
+        s.input_bg_color = cfg_color(&settings, "_input_bg_color", s.input_bg_color);
+        s.accent_color = cfg_color(&settings, "_accent_color", s.accent_color);
+        s.text_color = cfg_color(&settings, "_text_color", s.text_color);
         let old_status_font_size = s.status_font_size;
-        s.status_font_size = cfg_f32(&raw, "_status_font_size", s.status_font_size);
-        s.opacity = cfg_usize(&raw, "_opacity", s.opacity as usize).min(255) as u8;
-        s.case_sensitive = cfg_bool(&raw, "_case_sensitive", s.case_sensitive);
-        s.fuzzy_enabled = cfg_bool(&raw, "_fuzzy_match", s.fuzzy_enabled);
-        s.pinyin_enabled = cfg_bool(&raw, "_pinyin_search", s.pinyin_enabled);
-        s.panel_ratio_x = cfg_f32(&raw, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
-        s.panel_ratio_y = cfg_f32(&raw, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
+        s.status_font_size = cfg_f32(&settings, "_status_font_size", s.status_font_size);
+        s.opacity = cfg_usize(&settings, "_opacity", s.opacity as usize).min(255) as u8;
+        s.case_sensitive = cfg_bool(&settings, "_case_sensitive", s.case_sensitive);
+        s.fuzzy_enabled = cfg_bool(&settings, "_fuzzy_match", s.fuzzy_enabled);
+        s.pinyin_enabled = cfg_bool(&settings, "_pinyin_search", s.pinyin_enabled);
+        s.panel_ratio_x = cfg_f32(&settings, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
+        s.panel_ratio_y = cfg_f32(&settings, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
 
         // 更新画刷颜色（SetColor 不重建）
         if old_theme != s.theme_color || old_opacity != s.opacity {
@@ -392,7 +395,7 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
         }
 
         // 热键变更
-        let new_hotkey_str = cfg_str(&raw, "_hotkey", "Alt+Space");
+        let new_hotkey_str = cfg_str(&settings, "_hotkey", "Alt+Space");
         if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
             if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
                 let _ = UnregisterHotKey(h, HOTKEY_ID);
@@ -401,20 +404,19 @@ pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
                     s.hotkey_vk = new_vk;
                 } else {
                     eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
-                    let _ = std::fs::write("panic.log", format!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键\n"));
+                    let _ = std::fs::write(config::config_dir().join("panic.log"), format!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键\n"));
                     let _ = RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
                 }
             }
         } else {
             eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
-            let _ = std::fs::write("panic.log", format!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键\n"));
+            let _ = std::fs::write(config::config_dir().join("panic.log"), format!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键\n"));
         }
 
-        s.blacklist = cfg_blacklist(&raw, "_blacklist");
-        s.pinyin_overrides = cfg_pinyin_overrides(&raw, "_pinyin_overrides");
-        let plugin_configs = config::build_plugin_configs(&raw);
-        let new_entries: Vec<_> = raw.into_iter().filter(|e| !e.key.starts_with('_')).collect();
-        s.entries = new_entries;
+        s.blacklist = cfg_blacklist(&settings, "_blacklist");
+        s.pinyin_overrides = cfg_pinyin_overrides(&settings, "_pinyin_overrides");
+        let plugin_configs = config::build_plugin_configs(&settings);
+        s.entries = config::load_codes();
         s.config_mtime = cur;
         plugin::notify_reload(&plugin_configs);
 

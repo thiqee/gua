@@ -25,6 +25,9 @@ pub enum WidgetCmd {
     CollapseAll,
     CatRename(usize),
     CatDelete(usize),
+    CatAdd,
+    FontRefresh,
+    FontOpen,
 }
 
 pub trait Widget {
@@ -47,6 +50,9 @@ pub trait Widget {
     fn draw_overlay(&self, _res: &D2DRes) {}
     fn cmd(&self) -> WidgetCmd { WidgetCmd::None }
     fn bounds(&self) -> D2D_RECT_F { D2D_RECT_F::default() }
+    fn tick(&mut self) -> bool { false }
+    fn settings_key(&self) -> Option<&str> { None }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { unimplemented!() }
 }
 
 // ── helpers ──
@@ -203,11 +209,12 @@ pub struct ToggleSwitch {
     r: D2D_RECT_F,
     pub checked: bool,
     hovered: bool,
+    pub settings_key: Option<String>,
 }
 
 impl ToggleSwitch {
     pub fn new(checked: bool) -> Self {
-        Self { r: D2D_RECT_F::default(), checked, hovered: false }
+        Self { r: D2D_RECT_F::default(), checked, hovered: false, settings_key: None }
     }
 }
 
@@ -219,6 +226,8 @@ impl Widget for ToggleSwitch {
     }
     fn on_mouse_leave(&mut self) { self.hovered = false; }
     fn set_focused(&mut self, _val: bool) {}
+    fn text(&self) -> &str { if self.checked { "true" } else { "false" } }
+    fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
     fn on_click(&mut self, x: f32, y: f32) -> bool {
         let track_l = self.r.right - 40.0;
@@ -331,14 +340,15 @@ pub struct TextInput {
     sel_start: Option<usize>,
     sel_end: usize,
     dwrite_factory: Option<IDWriteFactory>,
+    pub settings_key: Option<String>,
 }
 
 impl TextInput {
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
     }
     pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, select_all: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
     }
     fn sel_range(&self) -> Option<(usize, usize)> {
         self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
@@ -484,6 +494,7 @@ impl Widget for TextInput {
     }
     fn focused(&self) -> bool { self.focused }
     fn text(&self) -> &str { &self.text }
+    fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
     fn on_key_down(&mut self, vk: u32) -> bool {
         self.scroll_hold.set(false);
@@ -833,6 +844,108 @@ impl Widget for ThreeDotsButton {
     }
 }
 
+// ── RefreshButton ──
+
+use std::time::Instant;
+
+pub struct RefreshButton {
+    r: D2D_RECT_F,
+    hovered: bool,
+    state: u8, // 0=idle, 1=spinning(dots), 2=done(✓)
+    start: Option<Instant>,
+    ticks: u32,
+    cmd: WidgetCmd,
+}
+
+impl RefreshButton {
+    pub fn new() -> Self {
+        Self { r: D2D_RECT_F::default(), hovered: false, state: 0, start: None, ticks: 0, cmd: WidgetCmd::FontRefresh }
+    }
+    pub fn reset(&mut self) {
+        self.state = 0;
+        self.start = None;
+        self.ticks = 0;
+    }
+}
+
+impl Widget for RefreshButton {
+    fn cmd(&self) -> WidgetCmd { self.cmd }
+    fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
+    fn bounds(&self) -> D2D_RECT_F { self.r }
+    fn on_mouse_move(&mut self, x: f32, y: f32) { self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom; }
+    fn on_mouse_leave(&mut self) { self.hovered = false; }
+    fn set_focused(&mut self, _val: bool) {}
+    fn on_click(&mut self, x: f32, y: f32) -> bool {
+        if !(x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom) { return false; }
+        if self.state == 0 {
+            self.state = 1;
+            self.start = Some(Instant::now());
+        }
+        true
+    }
+
+    fn tick(&mut self) -> bool {
+        match self.state {
+            1 => {
+                self.ticks += 1;
+                if self.ticks >= 3 {
+                    self.state = 2;
+                    self.start = Some(Instant::now());
+                }
+                true
+            }
+            2 => {
+                let elapsed = self.start.map(|t| t.elapsed()).unwrap_or_default();
+                if elapsed >= std::time::Duration::from_millis(500) {
+                    self.state = 0;
+                    self.start = None;
+                    self.ticks = 0;
+                    false
+                } else { true }
+            }
+            _ => false
+        }
+    }
+
+    fn draw(&self, res: &D2DRes) {
+        let inner = D2D_RECT_F {
+            left: self.r.left + 2.0,
+            top: self.r.top + 2.0,
+            right: self.r.right - 2.0,
+            bottom: self.r.bottom - 2.0,
+        };
+
+        // border for idle / spinning
+        if self.state != 2 {
+            let bc = if self.hovered { (0.29, 0.53, 0.80) } else { (0.40, 0.40, 0.40) };
+            let rr = D2D1_ROUNDED_RECT { rect: self.r, radiusX: 4.0, radiusY: 4.0 };
+            if let Some(b) = mk_brush(&res.d2d, bc.0, bc.1, bc.2, 1.0) {
+                unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            }
+        }
+
+        if let Some(tf) = tf_center(&res.dwrite, 12.0) {
+            if self.state == 1 {
+                let dots = [".", "..", "..."];
+                let idx = self.ticks.min(2) as usize;
+                let tc = if (self.ticks % 2) == 0 { 0.55 } else { 0.85 };
+                if let Some(b) = mk_brush(&res.d2d, tc, tc, tc, 1.0) {
+                    draw_text(&res.d2d, dots[idx], &tf, &inner, &b);
+                }
+            } else if self.state == 2 {
+                if let Some(b) = mk_brush(&res.d2d, 0.3, 0.8, 0.3, 1.0) {
+                    draw_text(&res.d2d, "✓", &tf, &inner, &b);
+                }
+            } else {
+                let tc = if self.hovered { 0.85 } else { 0.55 };
+                if let Some(b) = mk_brush(&res.d2d, tc, tc, tc, 1.0) {
+                    draw_text(&res.d2d, "刷新", &tf, &inner, &b);
+                }
+            }
+        }
+    }
+}
+
 // ── ClickLabel ──
 
 pub struct ClickLabel {
@@ -884,6 +997,7 @@ pub struct MultilineTextInput {
     sel_start: Option<usize>,
     sel_end: usize,
     dwrite_factory: Option<IDWriteFactory>,
+    pub settings_key: Option<String>,
 }
 
 impl MultilineTextInput {
@@ -898,13 +1012,15 @@ impl MultilineTextInput {
         }
     }
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, scroll_y: std::cell::Cell::new(0.0), content_h: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), hovered: false, cursor_pos: text.len(), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, scroll_y: std::cell::Cell::new(0.0), content_h: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), hovered: false, cursor_pos: text.len(), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
     }
 }
 
 impl Widget for MultilineTextInput {
     fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
     fn bounds(&self) -> D2D_RECT_F { self.r }
+    fn text(&self) -> &str { &self.text }
+    fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
     fn on_mouse_down(&mut self, x: f32, y: f32) {
         self.scroll_hold.set(false);
         if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
@@ -1283,6 +1399,7 @@ pub struct Dropdown {
     popup_item_h: f32,
     popup_max_visible: usize,
     popup_w: f32,
+    pub settings_key: Option<String>,
 }
 
 impl Dropdown {
@@ -1299,7 +1416,16 @@ impl Dropdown {
             popup_item_h: 32.0,
             popup_max_visible: 6,
             popup_w: 0.0,
+            settings_key: None,
         }
+    }
+
+    pub fn set_options(&mut self, options: Vec<String>) {
+        let cur = self.options.get(self.selected).cloned();
+        self.options = options;
+        self.selected = self.options.iter().position(|o| Some(o) == cur.as_ref()).unwrap_or(0);
+        if self.selected >= self.options.len() { self.selected = 0; }
+        self.popup_w = 0.0;
     }
 
     fn calc_popup_w(&mut self, res: &D2DRes) {
@@ -1327,6 +1453,9 @@ impl Dropdown {
 impl Widget for Dropdown {
     fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
     fn bounds(&self) -> D2D_RECT_F { self.r }
+    fn text(&self) -> &str { &self.options[self.selected] }
+    fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
         self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom;
@@ -1470,15 +1599,18 @@ pub struct KeyBindingInput {
     pub text: String,
     focused: bool,
     hovered: bool,
+    pub settings_key: Option<String>,
 }
 
 impl KeyBindingInput {
-    pub fn new(text: &str) -> Self { Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, hovered: false } }
+    pub fn new(text: &str) -> Self { Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, hovered: false, settings_key: None } }
 }
 
 impl Widget for KeyBindingInput {
     fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
     fn bounds(&self) -> D2D_RECT_F { self.r }
+    fn text(&self) -> &str { &self.text }
+    fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
     fn on_mouse_move(&mut self, x: f32, y: f32) { self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom; }
     fn on_mouse_leave(&mut self) { self.hovered = false; }
 
