@@ -9,7 +9,6 @@ const fn hex(c: u32) -> Color {
 
 pub struct Theme {
     pub bg_sidebar: Color,
-    pub bg_darkest: Color,
     pub bg_main: Color,
     pub bg_title: Color,
     pub bg_raised: Color,
@@ -17,8 +16,6 @@ pub struct Theme {
     pub bg_hover: Color,
     pub bg_input: Color,
     pub bg_widget: Color,
-    pub bg_card: Color,
-    pub bg_dropdown: Color,
     pub border: Color,
     pub border_hover: Color,
     pub border_focused: Color,
@@ -29,6 +26,7 @@ pub struct Theme {
     pub text_bright: Color,
     pub text_white: Color,
     pub accent: Color,
+    #[allow(dead_code)]
     pub accent_light: Color,
     pub green: Color,
     pub red: Color,
@@ -39,7 +37,6 @@ pub struct Theme {
 
 const DARK: &Theme = &Theme {
     bg_sidebar:    hex(0x0F0F0F),
-    bg_darkest:    hex(0x0D0D0D),
     bg_main:       hex(0x141414),
     bg_title:      hex(0x1F1F1F),
     bg_raised:     hex(0x1A1A1A),
@@ -47,8 +44,6 @@ const DARK: &Theme = &Theme {
     bg_hover:      hex(0x292929),
     bg_input:      hex(0x2E2E2E),
     bg_widget:     hex(0x333333),
-    bg_card:       hex(0x3D3D3D),
-    bg_dropdown:   hex(0x1A1A1A),
     border:        hex(0x383838),
     border_hover:  hex(0x454545),
     border_focused:hex(0x4D4D4D),

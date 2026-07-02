@@ -118,9 +118,10 @@ fn main() -> Result<()> {
         let fp = font_px(font_size, dpi);
         let state = AppState {
             entries,
-            filter: String::new(),
             input_text: String::new(),
             cursor_pos: 0,
+            sel_start: None,
+            sel_end: 0,
             search_query: String::new(),
             filtered_indices: Vec::new(),
             sel_index: 0,

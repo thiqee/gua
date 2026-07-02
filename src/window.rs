@@ -20,7 +20,6 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 #[link(name = "kernel32")]
 extern "system" {
-    fn SetProcessWorkingSetSize(h: HANDLE, min: usize, max: usize) -> i32;
     fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
 }
 
@@ -233,9 +232,10 @@ pub unsafe fn measure_text_width(s: &AppState, text: &str) -> f32 {
 pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.last_hide_time = Some(std::time::Instant::now());
     s.visible = false;
-    s.filter.clear();
     s.input_text.clear();
     s.cursor_pos = 0;
+    s.sel_start = None;
+    s.sel_end = 0;
     s.filtered_indices.clear();
     s.sel_index = 0;
     s.scroll_offset = 0;
@@ -245,16 +245,15 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     let hp = GetCurrentProcess();
     let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
     let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
-    let _ = SetProcessWorkingSetSize(hp, usize::MAX, usize::MAX);
 }
 
 /// 填充筛选列表并调整窗口高度
 pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
-    let (key_part, query_part) = if let Some(pos) = s.filter.find(' ') {
-        let (k, _) = s.filter.split_at(pos);
-        (k.to_string(), s.filter[pos + 1..].to_string())
+    let (key_part, query_part) = if let Some(pos) = s.input_text.find(' ') {
+        let (k, _) = s.input_text.split_at(pos);
+        (k.to_string(), s.input_text[pos + 1..].to_string())
     } else {
-        (s.filter.clone(), String::new())
+        (s.input_text.clone(), String::new())
     };
     s.search_query = query_part;
     s.filtered_indices.clear();
@@ -287,7 +286,7 @@ pub unsafe fn fill_list(s: &mut AppState, h: HWND) {
 /// 执行当前选中项
 pub unsafe fn execute_sel(h: HWND, s: &mut AppState) {
     let idx = if !s.search_query.is_empty() {
-        let key_part = s.filter.split(' ').next().unwrap_or("");
+        let key_part = s.input_text.split(' ').next().unwrap_or("");
         s.entries.iter().enumerate()
             .filter(|(_, e)| e.key == key_part)
             .max_by_key(|(_, e)| {
@@ -449,7 +448,6 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         }
 
         s.visible = true;
-        s.filter.clear();
         s.input_text.clear();
         s.cursor_pos = 0;
         s.filtered_indices.clear();

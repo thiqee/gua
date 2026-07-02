@@ -6,7 +6,6 @@ use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
 
-use crate::state::*;
 use crate::theme::*;
 use windows_numerics::Vector2;
 
@@ -73,6 +72,108 @@ fn draw_text(d2d: &ID2D1DeviceContext, text: &str, tf: &IDWriteTextFormat, r: &D
     let ws: Vec<u16> = text.encode_utf16().collect();
     unsafe {
         d2d.DrawText(&ws, tf, r as *const _, brush, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
+    }
+}
+
+fn shared_sel_range(sel_start: Option<usize>, sel_end: usize) -> Option<(usize, usize)> {
+    sel_start.map(|s| (s.min(sel_end), s.max(sel_end)))
+}
+
+fn shared_replace_sel(text: &mut String, cursor_pos: &mut usize, sel_start: &mut Option<usize>, sel_end: &mut usize, new: &str) {
+    if let Some((lo, hi)) = shared_sel_range(*sel_start, *sel_end) {
+        text.replace_range(lo..hi, new);
+        *cursor_pos = lo + new.len();
+        *sel_start = None;
+    }
+}
+
+fn shared_on_ctrl_key(text: &mut String, cursor_pos: &mut usize, sel_start: &mut Option<usize>, sel_end: &mut usize, scroll_hold: &std::cell::Cell<bool>, vk: u32) -> bool {
+    match vk {
+        0x41 => {
+            if text.is_empty() { return true; }
+            *sel_start = Some(0);
+            *sel_end = text.len();
+            *cursor_pos = text.len();
+            true
+        }
+        0x43 => {
+            if let Some((lo, hi)) = shared_sel_range(*sel_start, *sel_end) {
+                if lo < hi { clipboard_copy(&text[lo..hi]); }
+            }
+            true
+        }
+        0x56 => {
+            if let Some(paste) = clipboard_paste() {
+                if let Some((lo, hi)) = shared_sel_range(*sel_start, *sel_end) {
+                    text.replace_range(lo..hi, &paste);
+                    *cursor_pos = lo + paste.len();
+                    *sel_start = None;
+                } else {
+                    text.insert_str(*cursor_pos, &paste);
+                    *cursor_pos += paste.len();
+                }
+                scroll_hold.set(false);
+            }
+            true
+        }
+        0x58 => {
+            if let Some((lo, hi)) = shared_sel_range(*sel_start, *sel_end) {
+                if lo < hi { clipboard_copy(&text[lo..hi]); }
+                text.replace_range(lo..hi, "");
+                *cursor_pos = lo;
+                *sel_start = None;
+                scroll_hold.set(false);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn shared_on_key_down(text: &mut String, cursor_pos: &mut usize, sel_start: &mut Option<usize>, sel_end: &mut usize, vk: u32) -> bool {
+    match vk {
+        0x08 => {
+            if let Some((lo, hi)) = shared_sel_range(*sel_start, *sel_end) {
+                text.replace_range(lo..hi, "");
+                *cursor_pos = lo;
+                *sel_start = None;
+            } else if *cursor_pos > 0 {
+                let prev = text.floor_char_boundary(*cursor_pos - 1);
+                text.replace_range(prev..*cursor_pos, "");
+                *cursor_pos = prev;
+            }
+            true
+        }
+        0x2E => {
+            if let Some((lo, hi)) = shared_sel_range(*sel_start, *sel_end) {
+                text.replace_range(lo..hi, "");
+                *cursor_pos = lo;
+                *sel_start = None;
+            } else if *cursor_pos < text.len() {
+                let next = text.ceil_char_boundary(*cursor_pos + 1);
+                text.replace_range(*cursor_pos..next, "");
+            }
+            true
+        }
+        0x25 => {
+            if let Some((lo, _)) = shared_sel_range(*sel_start, *sel_end) {
+                *cursor_pos = lo;
+                *sel_start = None;
+            } else if *cursor_pos > 0 {
+                *cursor_pos = text.floor_char_boundary(*cursor_pos - 1);
+            }
+            true
+        }
+        0x27 => {
+            if let Some((_, hi)) = shared_sel_range(*sel_start, *sel_end) {
+                *cursor_pos = hi;
+                *sel_start = None;
+            } else if *cursor_pos < text.len() {
+                *cursor_pos = text.ceil_char_boundary(*cursor_pos + 1);
+            }
+            true
+        }
+        _ => false,
     }
 }
 
@@ -346,14 +447,10 @@ impl TextInput {
         Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
     }
     fn sel_range(&self) -> Option<(usize, usize)> {
-        self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
+        shared_sel_range(self.sel_start, self.sel_end)
     }
     fn replace_sel(&mut self, new: &str) {
-        if let Some((lo, hi)) = self.sel_range() {
-            self.text.replace_range(lo..hi, new);
-            self.cursor_pos = lo + new.len();
-            self.sel_start = None;
-        }
+        shared_replace_sel(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, new);
     }
     fn sync_scroll(&self) {
         let use_center = if self.center {
@@ -496,96 +593,18 @@ impl Widget for TextInput {
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
     fn on_ctrl_key(&mut self, vk: u32) -> bool {
-        match vk {
-            0x41 => {
-                if self.text.is_empty() { return true; }
-                self.sel_start = Some(0);
-                self.sel_end = self.text.len();
-                self.cursor_pos = self.text.len();
-                self.scroll_x.set(0.0);
-                true
-            }
-            0x43 => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
-                }
-                true
-            }
-            0x56 => {
-                if let Some(text) = clipboard_paste() {
-                    if let Some((lo, hi)) = self.sel_range() {
-                        self.text.replace_range(lo..hi, &text);
-                        self.cursor_pos = lo + text.len();
-                        self.sel_start = None;
-                    } else {
-                        self.text.insert_str(self.cursor_pos, &text);
-                        self.cursor_pos += text.len();
-                    }
-                    self.scroll_hold.set(false);
-                }
-                true
-            }
-            0x58 => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
-                    self.text.replace_range(lo..hi, "");
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                    self.scroll_hold.set(false);
-                }
-                true
-            }
-            _ => false,
-        }
+        let r = shared_on_ctrl_key(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, &self.scroll_hold, vk);
+        if r && vk == 0x41 { self.scroll_x.set(0.0); }
+        r
     }
 
     fn on_key_down(&mut self, vk: u32) -> bool {
         self.scroll_hold.set(false);
+        let r = shared_on_key_down(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, vk);
         match vk {
-            0x08 => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    self.text.replace_range(lo..hi, "");
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                } else if self.cursor_pos > 0 {
-                    let prev = self.text.floor_char_boundary(self.cursor_pos - 1);
-                    self.text.replace_range(prev..self.cursor_pos, "");
-                    self.cursor_pos = prev;
-                }
-                if self.text.is_empty() { self.scroll_x.set(0.0); }
-                true
-            }
-            0x2E => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    self.text.replace_range(lo..hi, "");
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                } else if self.cursor_pos < self.text.len() {
-                    let next = self.text.ceil_char_boundary(self.cursor_pos + 1);
-                    self.text.replace_range(self.cursor_pos..next, "");
-                }
-                if self.text.is_empty() { self.scroll_x.set(0.0); }
-                true
-            }
-            0x25 => {
-                if let Some((lo, _)) = self.sel_range() {
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                } else if self.cursor_pos > 0 {
-                    self.cursor_pos = self.text.floor_char_boundary(self.cursor_pos - 1);
-                }
-                self.sync_scroll(); true
-            }
-            0x27 => {
-                if let Some((_, hi)) = self.sel_range() {
-                    self.cursor_pos = hi;
-                    self.sel_start = None;
-                } else if self.cursor_pos < self.text.len() {
-                    self.cursor_pos = self.text.ceil_char_boundary(self.cursor_pos + 1);
-                }
-                self.sync_scroll(); true
-            }
-            _ => false,
+            0x08 | 0x2E => { if r && self.text.is_empty() { self.scroll_x.set(0.0); } r }
+            0x25 | 0x27 => { if r { self.sync_scroll(); } r }
+            _ => r,
         }
     }
 
@@ -800,36 +819,34 @@ impl Widget for ThreeDotsButton {
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
         self.hovered = -1;
-        if self.open {
-            let popup_l = self.r.right - 136.0;
-            let popup_t = self.r.top + 34.0;
-            let item_h = 28.0;
-            let popup_h = self.items.len() as f32 * item_h + 8.0;
-            if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
-                let mi = ((y - popup_t - 4.0) / item_h) as i32;
-                self.hovered = mi.min(self.items.len() as i32 - 1);
-            }
+        if !self.open || self.items.is_empty() { return; }
+        let popup_l = self.r.right - 136.0;
+        let popup_t = self.r.top + 34.0;
+        let item_h = 28.0;
+        let popup_h = self.items.len() as f32 * item_h + 8.0;
+        if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
+            let mi = ((y - popup_t - 4.0) / item_h) as i32;
+            self.hovered = mi.min(self.items.len() as i32 - 1);
         }
     }
     fn on_mouse_leave(&mut self) { self.hovered = -1; }
 
     fn on_click_with(&mut self, x: f32, y: f32, _res: &D2DRes) -> bool {
-        if self.open {
-            let popup_l = self.r.right - 136.0;
-            let popup_t = self.r.top + 34.0;
-            let item_h = 28.0;
-            let popup_h = self.items.len() as f32 * item_h + 8.0;
-            if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
-                let mi = ((y - popup_t - 4.0) / item_h) as usize;
-                if mi < self.items.len() {
-                    self.selected = Some(mi);
-                    self.open = false;
-                    return true;
-                }
+        if !self.open || self.items.is_empty() { return false; }
+        let popup_l = self.r.right - 136.0;
+        let popup_t = self.r.top + 34.0;
+        let item_h = 28.0;
+        let popup_h = self.items.len() as f32 * item_h + 8.0;
+        if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
+            let mi = ((y - popup_t - 4.0) / item_h) as usize;
+            if mi < self.items.len() {
+                self.selected = Some(mi);
+                self.open = false;
+                return true;
             }
-            self.open = false;
-            return false;
         }
+        self.open = false;
+        return false;
         if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
             self.open = !self.open;
             self.selected = None;
@@ -848,7 +865,7 @@ impl Widget for ThreeDotsButton {
     }
 
     fn draw_overlay(&self, res: &D2DRes) {
-        if !self.open { return; }
+        if !self.open || self.items.is_empty() { return; }
         let popup_l = self.r.right - 136.0;
         let popup_t = self.r.top + 34.0;
         let popup_r = D2D_RECT_F { left: popup_l, top: popup_t, right: popup_l + 120.0, bottom: popup_t + self.items.len() as f32 * 28.0 + 8.0 };
@@ -1035,14 +1052,10 @@ pub struct MultilineTextInput {
 
 impl MultilineTextInput {
     fn sel_range(&self) -> Option<(usize, usize)> {
-        self.sel_start.map(|s| (s.min(self.sel_end), s.max(self.sel_end)))
+        shared_sel_range(self.sel_start, self.sel_end)
     }
     fn replace_sel(&mut self, new: &str) {
-        if let Some((lo, hi)) = self.sel_range() {
-            self.text.replace_range(lo..hi, new);
-            self.cursor_pos = lo + new.len();
-            self.sel_start = None;
-        }
+        shared_replace_sel(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, new);
     }
     pub fn new(text: &str) -> Self {
         Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, scroll_y: std::cell::Cell::new(0.0), content_h: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), hovered: false, cursor_pos: text.len(), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
@@ -1056,46 +1069,7 @@ impl Widget for MultilineTextInput {
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
     fn on_ctrl_key(&mut self, vk: u32) -> bool {
-        match vk {
-            0x41 => {
-                if self.text.is_empty() { return true; }
-                self.sel_start = Some(0);
-                self.sel_end = self.text.len();
-                self.cursor_pos = self.text.len();
-                true
-            }
-            0x43 => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
-                }
-                true
-            }
-            0x56 => {
-                if let Some(text) = clipboard_paste() {
-                    if let Some((lo, hi)) = self.sel_range() {
-                        self.text.replace_range(lo..hi, &text);
-                        self.cursor_pos = lo + text.len();
-                        self.sel_start = None;
-                    } else {
-                        self.text.insert_str(self.cursor_pos, &text);
-                        self.cursor_pos += text.len();
-                    }
-                    self.scroll_hold.set(false);
-                }
-                true
-            }
-            0x58 => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    if lo < hi { clipboard_copy(&self.text[lo..hi]); }
-                    self.text.replace_range(lo..hi, "");
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                    self.scroll_hold.set(false);
-                }
-                true
-            }
-            _ => false,
-        }
+        shared_on_ctrl_key(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, &self.scroll_hold, vk)
     }
 
     fn on_mouse_down(&mut self, x: f32, y: f32) {
@@ -1206,48 +1180,8 @@ impl Widget for MultilineTextInput {
     }
     fn on_key_down(&mut self, vk: u32) -> bool {
         self.scroll_hold.set(false);
+        if shared_on_key_down(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, vk) { return true; }
         match vk {
-            0x08 => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    self.text.replace_range(lo..hi, "");
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                } else if self.cursor_pos > 0 {
-                    let prev = self.text.floor_char_boundary(self.cursor_pos - 1);
-                    self.text.replace_range(prev..self.cursor_pos, "");
-                    self.cursor_pos = prev;
-                }
-                true
-            }
-            0x2E => {
-                if let Some((lo, hi)) = self.sel_range() {
-                    self.text.replace_range(lo..hi, "");
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                } else if self.cursor_pos < self.text.len() {
-                    let next = self.text.ceil_char_boundary(self.cursor_pos + 1);
-                    self.text.replace_range(self.cursor_pos..next, "");
-                }
-                true
-            }
-            0x25 => {
-                if let Some((lo, _)) = self.sel_range() {
-                    self.cursor_pos = lo;
-                    self.sel_start = None;
-                } else if self.cursor_pos > 0 {
-                    self.cursor_pos = self.text.floor_char_boundary(self.cursor_pos - 1);
-                }
-                true
-            }
-            0x27 => {
-                if let Some((_, hi)) = self.sel_range() {
-                    self.cursor_pos = hi;
-                    self.sel_start = None;
-                } else if self.cursor_pos < self.text.len() {
-                    self.cursor_pos = self.text.ceil_char_boundary(self.cursor_pos + 1);
-                }
-                true
-            }
             0x26 => {
                 self.sel_start = None;
                 if let Some(ref dwf) = self.dwrite_factory {

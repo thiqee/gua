@@ -21,16 +21,16 @@ extern "system" {
 
 #[link(name = "kernel32")]
 extern "system" {
-    fn SetProcessWorkingSetSize(h: HANDLE, min: usize, max: usize) -> i32;
     fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
 }
 
 use crate::config;
 use crate::draw::*;
 use crate::plugin;
-    use crate::state::*;
-    use crate::widget::{clipboard_copy, clipboard_paste};
-    use crate::tray;
+use crate::state::*;
+use crate::theme;
+use crate::widget::{clipboard_copy, clipboard_paste};
+use crate::tray;
 use crate::window::*;
 
 #[link(name = "imm32")]
@@ -133,6 +133,20 @@ pub unsafe extern "system" fn wndproc(
                         format!("{}{}", display, comp_display)
                     };
                     d2d_draw_text(&r.d2d_context, &full_text, tf, &input_rect, text_brush);
+
+                    // 选中高亮
+                    if s.visible && comp_display.is_empty() {
+                        if let Some(ss) = s.sel_start {
+                            if s.sel_end > ss {
+                                let left = ir.left as f32 + 8.0 + measure_text_width(s, &s.input_text[..ss].replace("&", "&&"));
+                                let right = ir.left as f32 + 8.0 + measure_text_width(s, &s.input_text[..s.sel_end].replace("&", "&&"));
+                                let cy = ir.top as f32 + ((ir.bottom - ir.top) as f32 - fh) / 2.0;
+                                if let Some(b) = theme::brush(&r.d2d_context, theme::T.accent, 0.25) {
+                                    d2d_fill_round_rect(&r.d2d_context, left, cy, right - left, fh, 2.0, &b);
+                                }
+                            }
+                        }
+                    }
 
                     // 光标位置 = 已输入 + 拼写中（append 模式）
                     if s.visible {
@@ -271,7 +285,6 @@ pub unsafe extern "system" fn wndproc(
                         let result = String::from_utf16_lossy(&buf[..end]);
                         s.input_text.insert_str(s.cursor_pos, &result);
                         s.cursor_pos += result.len();
-                        s.filter = s.input_text.clone();
                         s.composing.clear();
                         fill_list(s, h);
                     }
@@ -350,33 +363,35 @@ pub unsafe extern "system" fn wndproc(
                     return LRESULT(0);
                 }
                 0x08 => {
+                    s.sel_start = None;
                     if s.cursor_pos > 0 {
                         let prev = s.input_text.floor_char_boundary(s.cursor_pos - 1);
                         s.input_text.replace_range(prev..s.cursor_pos, "");
                         s.cursor_pos = prev;
-                        s.filter = s.input_text.clone();
                         fill_list(s, h);
                         let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
                     return LRESULT(0);
                 }
                 0x25 => {
+                    s.sel_start = None;
                     if s.cursor_pos > 0 {
                         s.cursor_pos = s.input_text.floor_char_boundary(s.cursor_pos - 1);
                     }
                     return LRESULT(0);
                 }
                 0x27 => {
+                    s.sel_start = None;
                     if s.cursor_pos < s.input_text.len() {
                         s.cursor_pos = s.input_text.ceil_char_boundary(s.cursor_pos + 1);
                     }
                     return LRESULT(0);
                 }
                 0x2E => {
+                    s.sel_start = None;
                     if s.cursor_pos < s.input_text.len() {
                         let next = s.input_text.ceil_char_boundary(s.cursor_pos + 1);
                         s.input_text.replace_range(s.cursor_pos..next, "");
-                        s.filter = s.input_text.clone();
                         fill_list(s, h);
                         let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     }
@@ -436,6 +451,8 @@ pub unsafe extern "system" fn wndproc(
                     if ctrl {
                         match wp.0 as u32 {
                             0x41 => { // Ctrl+A
+                                s.sel_start = Some(0);
+                                s.sel_end = s.input_text.len();
                                 s.cursor_pos = s.input_text.len();
                                 let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                             }
@@ -446,7 +463,6 @@ pub unsafe extern "system" fn wndproc(
                                 if let Some(text) = clipboard_paste() {
                                     s.input_text.insert_str(s.cursor_pos, &text);
                                     s.cursor_pos += text.len();
-                                    s.filter = s.input_text.clone();
                                     fill_list(s, h);
                                     let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                                 }
@@ -455,7 +471,6 @@ pub unsafe extern "system" fn wndproc(
                                 let _ = clipboard_copy(&s.input_text);
                                 s.input_text.clear();
                                 s.cursor_pos = 0;
-                                s.filter = String::new();
                                 fill_list(s, h);
                                 let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                             }
@@ -469,13 +484,13 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_CHAR => {
+            s.sel_start = None;
             let ch = match char::from_u32(wp.0 as u32) {
                 Some(c) if !c.is_control() => c,
                 _ => { return LRESULT(0); }
             };
             s.input_text.insert(s.cursor_pos, ch);
             s.cursor_pos += ch.len_utf8();
-            s.filter = s.input_text.clone();
             fill_list(s, h);
             let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
@@ -535,7 +550,6 @@ pub unsafe extern "system" fn wndproc(
                 let hp = GetCurrentProcess();
                 let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
                 let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
-                let _ = SetProcessWorkingSetSize(hp, usize::MAX, usize::MAX);
             }
             return LRESULT(0);
         }

@@ -400,9 +400,10 @@ pub unsafe fn get_foreground_exe() -> Option<String> {
 
 pub struct AppState {
     pub entries: Vec<config::Entry>,
-    pub filter: String,
     pub input_text: String,
     pub cursor_pos: usize,
+    pub sel_start: Option<usize>,
+    pub sel_end: usize,
     pub search_query: String,
     pub filtered_indices: Vec<usize>,
     pub sel_index: usize,

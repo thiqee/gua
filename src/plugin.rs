@@ -93,6 +93,12 @@ struct LoadedPlugin {
     internal_to_user: HashMap<i32, i32>,
 }
 
+impl Drop for LoadedPlugin {
+    fn drop(&mut self) {
+        unsafe { let _ = FreeLibrary(self.lib); }
+    }
+}
+
 use windows::Win32::Foundation::HWND;
 
 /// 单线程 UnsafeCell 包装（无运行时借用检查）
@@ -369,7 +375,15 @@ pub unsafe fn load_all(
             continue;
         }
 
-        let name_str = CStr::from_ptr(vtable.name).to_string_lossy().to_string();
+        let name_str = match CStr::from_ptr(vtable.name).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                plog(&format!("{}: 插件名不是合法 UTF-8，跳过", file_stem));
+                let _ = FreeLibrary(lib);
+                CURRENT_PLUGIN_IDX.set(usize::MAX);
+                continue;
+            }
+        };
         plog(&format!("{}: 名称=\"{}\" has_init={}", file_stem, name_str, vtable.init.is_some()));
         if vtable.vtable_size > std::mem::size_of::<PluginVtable>() as u32 {
             vtable.vtable_size = std::mem::size_of::<PluginVtable>() as u32;
@@ -536,14 +550,11 @@ unsafe fn unload_current_plugins() {
             if let Some(f) = cleanup_fn { f(); }
         });
         unregister_all_for_plugin(i);
-        let _ = FreeLibrary(PLUGINS.r()[i].lib);
     }
 }
 
 unsafe fn cleanup_plugin(idx: usize) {
     unregister_all_for_plugin(idx);
-    let lib = PLUGINS.r()[idx].lib;
-    let _ = FreeLibrary(lib);
     PLUGINS.w().remove(idx);
 }
 
