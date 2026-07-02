@@ -19,6 +19,7 @@ use crate::plugin;
 use crate::state::*;
 use crate::widget::*;
 use crate::window;
+use crate::theme::*;
 
 #[link(name = "user32")]
 extern "system" {
@@ -48,7 +49,10 @@ const BOTTOM_H: f32 = 52.0;
 const SIDEBAR_W: f32 = 140.0;
 const CONTENT_L: f32 = 140.0;
 const CONTENT_PAD: f32 = 24.0;
-const ACCENT: (f32, f32, f32) = (0.29, 0.53, 0.80);
+const ROW_H: f32 = 28.0;
+const ROW_GAP: f32 = 38.0;
+const HALF_PAD: f32 = 14.0;
+const CORNER_R: f32 = 6.0;
 
 #[allow(dead_code)]
 pub struct SettingsWin {
@@ -93,7 +97,7 @@ unsafe fn main_state() -> *mut AppState {
 
 fn card_hdr(name: &str, w: &mut Vec<Box<dyn Widget>>, y: &mut f32, cx: f32, card_r: f32) {
     w.push(Box::new(GroupHeader::new(name)));
-    w.last_mut().unwrap().set_bounds(D2D_RECT_F { left: cx, top: *y, right: card_r, bottom: *y + 28.0 });
+    w.last_mut().unwrap().set_bounds(D2D_RECT_F { left: cx, top: *y, right: card_r, bottom: *y + ROW_H });
     *y += 36.0;
 }
 
@@ -109,7 +113,7 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
     let cw = (S_W as f32) - CONTENT_L - CONTENT_PAD - CONTENT_PAD;
     let card_l = cx;
     let card_r = cx + cw;
-    let inner_l = cx + 14.0;
+    let inner_l = cx + HALF_PAD;
     let inner_w = cw - 28.0;
     let mut y = TITLE_H + CONTENT_PAD;
 
@@ -146,16 +150,16 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
                 ("区分大小写", "_case_sensitive", sb(settings, "_case_sensitive", true)),
             ];
             for (i, (label, key, checked)) in toggles.iter().enumerate() {
-                let row_y = y + 10.0 + i as f32 * 38.0;
+                let row_y = y + 10.0 + i as f32 * ROW_GAP;
                 let mut lbl = Label::new(label);
-                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inner_w - 56.0, bottom: row_y + 28.0 });
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inner_w - 56.0, bottom: row_y + ROW_H });
                 w.push(Box::new(lbl));
                 let mut sw = ToggleSwitch::new(*checked);
                 sw.settings_key = Some(key.to_string());
-                sw.set_bounds(D2D_RECT_F { left: tog_l, top: row_y, right: tog_l + 48.0, bottom: row_y + 28.0 });
+                sw.set_bounds(D2D_RECT_F { left: tog_l, top: row_y, right: tog_l + 48.0, bottom: row_y + ROW_H });
                 w.push(Box::new(sw));
             }
-            y += 10.0 + 4.0 * 38.0 + 12.0;
+            y += 10.0 + 4.0 * ROW_GAP + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
@@ -190,17 +194,17 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
                 ("文字色", "_text_color", sv(settings, "_text_color", "#CCCCCC")),
             ];
             for (i, (label, key, val)) in colors.iter().enumerate() {
-                let row_y = y + 10.0 + i as f32 * 38.0;
+                let row_y = y + 10.0 + i as f32 * ROW_GAP;
                 let mut lbl = Label::new(label);
-                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + ROW_H });
                 w.push(Box::new(lbl));
                 let mut inp = TextInput::new(val);
                 inp.settings_key = Some(key.to_string());
                 inp.center = true;
-                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
+                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + ROW_H });
                 w.push(Box::new(inp));
             }
-            y += 10.0 + 4.0 * 38.0 + 12.0;
+            y += 10.0 + 4.0 * ROW_GAP + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
@@ -220,36 +224,36 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
             };
             let row_y0 = y + 10.0;
             let mut lbl0 = Label::new("字体选择");
-            lbl0.set_bounds(D2D_RECT_F { left: inner_l, top: row_y0, right: inner_l + inp_l - 8.0, bottom: row_y0 + 28.0 });
+            lbl0.set_bounds(D2D_RECT_F { left: inner_l, top: row_y0, right: inner_l + inp_l - 8.0, bottom: row_y0 + ROW_H });
             w.push(Box::new(lbl0));
             let mut dd = Dropdown::new(&font_options, &current_font);
             dd.settings_key = Some("_font".to_string());
-            dd.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y0, right: inner_l + inp_l + inp_w, bottom: row_y0 + 28.0 });
+            dd.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y0, right: inner_l + inp_l + inp_w, bottom: row_y0 + ROW_H });
             w.push(Box::new(dd));
             let mut ref_btn = RefreshButton::new();
-            ref_btn.set_bounds(D2D_RECT_F { left: inner_l + inp_l + inp_w + 4.0, top: row_y0, right: inner_l + inp_l + inp_w + 48.0, bottom: row_y0 + 28.0 });
+            ref_btn.set_bounds(D2D_RECT_F { left: inner_l + inp_l + inp_w + 4.0, top: row_y0, right: inner_l + inp_l + inp_w + 48.0, bottom: row_y0 + ROW_H });
             w.push(Box::new(ref_btn));
             let mut folder_btn = IconButton::new("📁");
             folder_btn.bordered = true;
             folder_btn.cmd = WidgetCmd::FontOpen;
-            folder_btn.set_bounds(D2D_RECT_F { left: inner_l + inp_l + inp_w + 52.0, top: row_y0, right: inner_l + inp_l + inp_w + 80.0, bottom: row_y0 + 28.0 });
+            folder_btn.set_bounds(D2D_RECT_F { left: inner_l + inp_l + inp_w + 52.0, top: row_y0, right: inner_l + inp_l + inp_w + 80.0, bottom: row_y0 + ROW_H });
             w.push(Box::new(folder_btn));
             let font_sizes = [
                 ("字号", "_font_size", sv(settings, "_font_size", "18")),
                 ("状态栏字号", "_status_font_size", sv(settings, "_status_font_size", "12")),
             ];
             for (i, (label, key, val)) in font_sizes.iter().enumerate() {
-                let row_y = y + 10.0 + (i + 1) as f32 * 38.0;
+                let row_y = y + 10.0 + (i + 1) as f32 * ROW_GAP;
                 let mut lbl = Label::new(label);
-                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + ROW_H });
                 w.push(Box::new(lbl));
                 let mut inp = TextInput::new(val);
                 inp.settings_key = Some(key.to_string());
                 inp.center = true;
-                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
+                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + ROW_H });
                 w.push(Box::new(inp));
             }
-            y += 10.0 + 3.0 * 38.0 + 12.0;
+            y += 10.0 + 3.0 * ROW_GAP + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
 
@@ -264,17 +268,17 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
                 ("最大显示限制", "_max_results", sv(settings, "_max_results", "8")),
             ];
             for (i, (label, key, val)) in layout.iter().enumerate() {
-                let row_y = y + 10.0 + i as f32 * 38.0;
+                let row_y = y + 10.0 + i as f32 * ROW_GAP;
                 let mut lbl = Label::new(label);
-                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + 28.0 });
+                lbl.set_bounds(D2D_RECT_F { left: inner_l, top: row_y, right: inner_l + inp_l - 8.0, bottom: row_y + ROW_H });
                 w.push(Box::new(lbl));
                 let mut inp = TextInput::new(val);
                 inp.settings_key = Some(key.to_string());
                 inp.center = true;
-                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + 28.0 });
+                inp.set_bounds(D2D_RECT_F { left: inner_l + inp_l, top: row_y, right: inner_l + inp_l + inp_w, bottom: row_y + ROW_H });
                 w.push(Box::new(inp));
             }
-            y += 10.0 + 6.0 * 38.0 + 12.0;
+            y += 10.0 + 6.0 * ROW_GAP + 12.0;
             card_bg(cards, &mut y, card_l, card_r, ct);
             y += 12.0;
         }
@@ -333,6 +337,7 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
     // 状态更新段 — 可能因 D2D/DWrite 设备异常 panic，用 catch_unwind 保护
     let settings = s.settings.clone();
     let state_ptr = sm;
+    let mut hotkey_err = false;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let state = &mut *state_ptr;
         let cs = |key: &str, def: &str| -> String {
@@ -405,8 +410,8 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
             if RegisterHotKey(main_hwnd, HOTKEY_ID, new_mod, new_vk).as_bool() {
                 state.mod_keys = new_mod;
                 state.hotkey_vk = new_vk;
-            } else {
-                let _ = RegisterHotKey(main_hwnd, HOTKEY_ID, state.mod_keys, state.hotkey_vk);
+            } else if !RegisterHotKey(main_hwnd, HOTKEY_ID, state.mod_keys, state.hotkey_vk).as_bool() {
+                hotkey_err = true;
             }
         }
     }
@@ -418,7 +423,7 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
     }));
 
     // 提示（闭包外，不受 catch_unwind 影响）
-    s.save_msg = "保存成功".to_string();
+    s.save_msg = if hotkey_err { "热键注册失败，请更换快捷键".to_string() } else { "保存成功".to_string() };
     let _ = SetTimer(Some(h), 100, 1500, None);
     let _ = InvalidateRect(Some(h), None, true);
 
@@ -440,7 +445,7 @@ unsafe fn build_codes_tab(
     let cw = (S_W as f32) - CONTENT_L - CONTENT_PAD - CONTENT_PAD;
     let card_l = cx;
     let card_r = cx + cw;
-    let inner_l = cx + 14.0;
+    let inner_l = cx + HALF_PAD;
     let inner_w = cw - 28.0;
 
     cards.clear();
@@ -449,23 +454,23 @@ unsafe fn build_codes_tab(
 
     // Search box + expand/collapse all buttons
     let mut lbl_search = Label::new("搜索：");
-    lbl_search.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 50.0, bottom: y + 28.0 });
+    lbl_search.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 50.0, bottom: y + ROW_H });
     w.push(Box::new(lbl_search));
     let mut search_inp = TextInput::new(search);
     search_inp.select_on_focus = false;
-    search_inp.set_bounds(D2D_RECT_F { left: inner_l + 54.0, top: y, right: inner_l + inner_w - 170.0, bottom: y + 28.0 });
+    search_inp.set_bounds(D2D_RECT_F { left: inner_l + 54.0, top: y, right: inner_l + inner_w - 170.0, bottom: y + ROW_H });
     w.push(Box::new(search_inp));
 
     let mut exp_all = IconButton::new("全部展开");
     exp_all.bordered = true;
     exp_all.cmd = WidgetCmd::ExpandAll;
-    exp_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 166.0, top: y, right: inner_l + inner_w - 84.0, bottom: y + 28.0 });
+    exp_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 166.0, top: y, right: inner_l + inner_w - 84.0, bottom: y + ROW_H });
     w.push(Box::new(exp_all));
 
     let mut col_all = IconButton::new("全部折叠");
     col_all.bordered = true;
     col_all.cmd = WidgetCmd::CollapseAll;
-    col_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 80.0, top: y, right: inner_l + inner_w, bottom: y + 28.0 });
+    col_all.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 80.0, top: y, right: inner_l + inner_w, bottom: y + ROW_H });
     w.push(Box::new(col_all));
     y += 42.0;
 
@@ -502,7 +507,7 @@ unsafe fn build_codes_tab(
         cat_expanded.push(if i < saved_state.len() { saved_state[i] } else { true });
     }
 
-    let row_h = 28.0;
+    let row_h = ROW_H;
     let col_key_w = 90.0;
     let col_val_w = 230.0;
     let del_w = 24.0;
@@ -805,54 +810,52 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
 
             let _ = s.d2d_context.BeginDraw();
-            let _ = s.d2d_context.Clear(Some(&D2D1_COLOR_F { r: 0.08, g: 0.08, b: 0.08, a: 1.0 } as *const _));
+            let _ = s.d2d_context.Clear(Some(&D2D1_COLOR_F { r: T.bg_main.0, g: T.bg_main.1, b: T.bg_main.2, a: 1.0 } as *const _));
 
             let s_main = main_state();
             let dwf = if !s_main.is_null() { gua_renderer(&*s_main).map(|r| r.dwrite_factory.clone()) } else { None };
-            let (ar, ag, ab) = if !s_main.is_null() { let s = &*s_main; let c = color_to_d2d(s.accent_color, 1.0); (c.r, c.g, c.b) } else { ACCENT };
+            let ar: Color = if !s_main.is_null() { let s = &*s_main; let c = color_to_d2d(s.accent_color, 1.0); (c.r, c.g, c.b) } else { T.accent };
 
             // ── 标题栏 ──
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.05, 0.05, 0.05, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_sidebar, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: 0.0, right: S_W as f32, bottom: TITLE_H } as *const _, &b);
             }
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.12, 0.12, 0.12, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_title, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: TITLE_H - 1.0, right: S_W as f32, bottom: TITLE_H } as *const _, &b);
             }
             if let Some(ref dwf) = dwf {
-                let f = to_w("Microsoft YaHei"); let l = to_w("en-us");
-                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(l.as_ptr())) {
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(crate::state::FONT_FAMILY.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0, PCWSTR(crate::state::FONT_LOCALE.as_ptr())) {
                     let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                    if let Some(b) = mk_brush_(&s.d2d_context, 0.45, 0.45, 0.45, 1.0) {
+                    if let Some(b) = brush(&s.d2d_context, T.text_disabled, 1.0) {
                         s.d2d_context.DrawText(&to_w("Gua 设置"), &tf, &D2D_RECT_F { left: 16.0, top: 0.0, right: 120.0, bottom: TITLE_H } as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
                     }
                 }
             }
 
             // ── 侧边栏 ──
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.06, 0.06, 0.06, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_sidebar, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: TITLE_H, right: SIDEBAR_W, bottom: S_H as f32 - BOTTOM_H } as *const _, &b);
             }
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.14, 0.14, 0.14, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_separator, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: SIDEBAR_W - 1.0, top: TITLE_H, right: SIDEBAR_W, bottom: S_H as f32 - BOTTOM_H } as *const _, &b);
             }
             let names = ["通用", "外观", "识别码"];
             for (i, name) in names.iter().enumerate() {
                 let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
-                let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + 38.0 };
+                let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + ROW_GAP };
                 let sel = i == s.cat;
                 if sel {
-                    if let Some(b) = mk_brush_(&s.d2d_context, ar, ag, ab, 1.0) {
+                    if let Some(b) = brush(&s.d2d_context, ar, 1.0) {
                         s.d2d_context.FillRectangle(&D2D_RECT_F { left: 4.0, top: btn_top + 4.0, right: 7.0, bottom: btn_top + 34.0 } as *const _, &b);
                     }
-                    if let Some(b) = mk_brush_(&s.d2d_context, ar, ag, ab, 0.15) {
-                        s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: btn, radiusX: 6.0, radiusY: 6.0 } as *const _, &b);
+                    if let Some(b) = brush(&s.d2d_context, ar, 0.15) {
+                        s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: btn, radiusX: CORNER_R, radiusY: CORNER_R } as *const _, &b);
                     }
                 }
-                let (rr, gg, bb) = if sel { (0.85, 0.85, 0.85) } else { (0.50, 0.50, 0.50) };
-                if let Some(b) = mk_brush_(&s.d2d_context, rr, gg, bb, 1.0) {
+                let rr: Color = if sel { T.text_bright } else { T.text };
+                if let Some(b) = brush(&s.d2d_context, rr, 1.0) {
                     if let Some(ref dwf) = dwf {
-                        let f2 = to_w("Microsoft YaHei"); let l2 = to_w("en-us");
-                        if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f2.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0, PCWSTR(l2.as_ptr())) {
+                        if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(crate::state::FONT_FAMILY.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0, PCWSTR(crate::state::FONT_LOCALE.as_ptr())) {
                             let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                             let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                             s.d2d_context.DrawText(&to_w(name), &tf, &btn as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
@@ -870,7 +873,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             s.d2d_context.SetTransform(&mtx as *const _ as *const _);
 
             for card in &s.cards {
-                if let Some(b) = mk_brush_(&s.d2d_context, 0.14, 0.14, 0.14, 1.0) {
+                if let Some(b) = brush(&s.d2d_context, T.bg_separator, 1.0) {
                     s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: *card, radiusX: 8.0, radiusY: 8.0 } as *const _, &b);
                 }
             }
@@ -888,14 +891,14 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let track_l = S_W as f32 - 16.0;
             let track_t = TITLE_H + 4.0;
             let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.10, 0.10, 0.10, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_raised, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: track_l, top: track_t, right: track_l + 8.0, bottom: track_t + track_h } as *const _, &b);
             }
             let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
             if max_scroll > 0.0 {
                 let thumb_h = (track_h - 10.0) * (track_h / (track_h + max_scroll));
                 let thumb_t = track_t + 5.0 + (s.scroll_y / max_scroll) * (track_h - 10.0 - thumb_h);
-                if let Some(b) = mk_brush_(&s.d2d_context, 0.30, 0.30, 0.30, 1.0) {
+                if let Some(b) = brush(&s.d2d_context, T.border_focused, 1.0) {
                     s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F { left: track_l, top: thumb_t, right: track_l + 8.0, bottom: thumb_t + thumb_h },
                         radiusX: 3.0, radiusY: 3.0,
@@ -904,10 +907,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
 
             // ── 底部操作栏 ──
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.06, 0.06, 0.06, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_sidebar, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: S_H as f32 - BOTTOM_H, right: S_W as f32, bottom: S_H as f32 } as *const _, &b);
             }
-            if let Some(b) = mk_brush_(&s.d2d_context, 0.12, 0.12, 0.12, 1.0) {
+            if let Some(b) = brush(&s.d2d_context, T.bg_title, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: S_H as f32 - BOTTOM_H, right: S_W as f32, bottom: S_H as f32 - BOTTOM_H + 1.0 } as *const _, &b);
             }
 
@@ -917,49 +920,46 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let save_l = S_W as f32 - 20.0 - 80.0;
 
             if s.cat == 2 {
-                let add_cat_l = CONTENT_L + 14.0;
+                let add_cat_l = CONTENT_L + HALF_PAD;
                 let add_cat_r = add_cat_l + 100.0;
                 let acbr = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: add_cat_l, top: bty, right: add_cat_r, bottom: bby }, radiusX: 4.0, radiusY: 4.0 };
-                let bc = if s.cat_add_hovered { (0.29, 0.53, 0.80) } else { (0.40, 0.40, 0.40) };
-                if let Some(b) = mk_brush_(&s.d2d_context, bc.0, bc.1, bc.2, 1.0) {
+                let bc: Color = if s.cat_add_hovered { T.accent } else { T.text_secondary };
+                if let Some(b) = brush(&s.d2d_context, bc, 1.0) {
                     s.d2d_context.DrawRoundedRectangle(&acbr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>);
                 }
                 if let Some(ref dwf) = dwf {
-                    let f2 = to_w("Microsoft YaHei"); let l2 = to_w("en-us");
-                    if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f2.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l2.as_ptr())) {
+                    if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(crate::state::FONT_FAMILY.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(crate::state::FONT_LOCALE.as_ptr())) {
                         let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                         let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                        let tc = if s.cat_add_hovered { 0.85 } else { 0.55 };
-                        if let Some(b) = mk_brush_(&s.d2d_context, tc, tc, tc, 1.0) {
+                        let tc: Color = if s.cat_add_hovered { T.text_bright } else { T.tab_text };
+                        if let Some(b) = brush(&s.d2d_context, tc, 1.0) {
                             s.d2d_context.DrawText(&to_w("+ 添加分类"), &tf, &acbr.rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
                         }
                     }
                 }
             }
 
-            let cbr = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: close_l, top: bty, right: close_l + 80.0, bottom: bby }, radiusX: 6.0, radiusY: 6.0 };
-            let (cr, cg, cb) = if s.close_hovered { (0.65, 0.20, 0.15) } else { (0.35, 0.35, 0.35) };
-            if let Some(b) = mk_brush_(&s.d2d_context, cr, cg, cb, 1.0) { s.d2d_context.FillRoundedRectangle(&cbr as *const _, &b); }
+            let cbr = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: close_l, top: bty, right: close_l + 80.0, bottom: bby }, radiusX: CORNER_R, radiusY: CORNER_R };
+            let cr: Color = if s.close_hovered { T.red } else { T.text_dim };
+            if let Some(b) = brush(&s.d2d_context, cr, 1.0) { s.d2d_context.FillRoundedRectangle(&cbr as *const _, &b); }
             if let Some(ref dwf) = dwf {
-                let f3 = to_w("Microsoft YaHei"); let l3 = to_w("en-us");
-                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f3.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l3.as_ptr())) {
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(crate::state::FONT_FAMILY.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(crate::state::FONT_LOCALE.as_ptr())) {
                     let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                     let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                    if let Some(b) = mk_brush_(&s.d2d_context, 1.0, 1.0, 1.0, 1.0) {
+                    if let Some(b) = brush(&s.d2d_context, T.text_white, 1.0) {
                         s.d2d_context.DrawText(&to_w("关闭"), &tf, &cbr.rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
                     }
                 }
             }
 
-            let sbr_ = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: save_l, top: bty, right: save_l + 80.0, bottom: bby }, radiusX: 6.0, radiusY: 6.0 };
-            let (sar, sag, sab) = if s.save_hovered { ((ar + 0.1).min(1.0), (ag + 0.1).min(1.0), (ab + 0.1).min(1.0)) } else { (ar, ag, ab) };
-            if let Some(b) = mk_brush_(&s.d2d_context, sar, sag, sab, 1.0) { s.d2d_context.FillRoundedRectangle(&sbr_ as *const _, &b); }
+            let sbr_ = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: save_l, top: bty, right: save_l + 80.0, bottom: bby }, radiusX: CORNER_R, radiusY: CORNER_R };
+            let sar: Color = if s.save_hovered { ((ar.0 + 0.1).min(1.0), (ar.1 + 0.1).min(1.0), (ar.2 + 0.1).min(1.0)) } else { ar };
+            if let Some(b) = brush(&s.d2d_context, sar, 1.0) { s.d2d_context.FillRoundedRectangle(&sbr_ as *const _, &b); }
             if let Some(ref dwf) = dwf {
-                let f4 = to_w("Microsoft YaHei"); let l4 = to_w("en-us");
-                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f4.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l4.as_ptr())) {
+                if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(crate::state::FONT_FAMILY.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(crate::state::FONT_LOCALE.as_ptr())) {
                     let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                     let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                    if let Some(b) = mk_brush_(&s.d2d_context, 1.0, 1.0, 1.0, 1.0) {
+                    if let Some(b) = brush(&s.d2d_context, T.text_white, 1.0) {
                         s.d2d_context.DrawText(&to_w("保存"), &tf, &sbr_.rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
                     }
                 }
@@ -970,11 +970,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let msg_l = (S_W as f32 - msg_w) / 2.0;
                 let msg_rect = D2D_RECT_F { left: msg_l, top: bty, right: msg_l + msg_w, bottom: bby };
                 if let Some(ref dwf) = dwf {
-                    let f5 = to_w("Microsoft YaHei"); let l5 = to_w("en-us");
-                    if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(f5.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(l5.as_ptr())) {
+                    if let Ok(tf) = dwf.CreateTextFormat(PCWSTR(crate::state::FONT_FAMILY.as_ptr()), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, PCWSTR(crate::state::FONT_LOCALE.as_ptr())) {
                         let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                         let _ = tf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                        if let Some(b) = mk_brush_(&s.d2d_context, 0.3, 0.8, 0.3, 1.0) {
+                        if let Some(b) = brush(&s.d2d_context, T.green, 1.0) {
                             s.d2d_context.DrawText(&to_w(&s.save_msg), &tf, &msg_rect as *const _, &b, D2D1_DRAW_TEXT_OPTIONS(0), DWRITE_MEASURING_MODE(0));
                         }
                     }
@@ -1016,7 +1015,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let close_l = S_W as f32 - 20.0 - 80.0 * 2.0 - 8.0;
                 let save_l = S_W as f32 - 20.0 - 80.0;
 
-                let add_cat_l = CONTENT_L + 14.0;
+                let add_cat_l = CONTENT_L + HALF_PAD;
                 let add_cat_r = add_cat_l + 100.0;
                 if x >= add_cat_l && x <= add_cat_r && y >= bty && y <= bby {
                     if s.cat == 2 {
@@ -1050,7 +1049,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
 
                 if y >= bty && y <= bby { return LRESULT(0); }
                 // ── 滚动条拖拽 ──
-                let track_l = S_W as f32 - 14.0;
+                let track_l = S_W as f32 - HALF_PAD;
                 let track_t = TITLE_H + 4.0;
                 let track_h = S_H as f32 - BOTTOM_H - TITLE_H - 8.0;
                 let max_scroll = (s.content_h - (S_H as f32 - TITLE_H - BOTTOM_H)).max(0.0);
@@ -1072,7 +1071,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if x < SIDEBAR_W {
                     for i in 0..3 {
                         let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
-                        let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + 38.0 };
+                        let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + ROW_GAP };
                         if x >= btn.left && x <= btn.right && y >= btn.top && y <= btn.bottom {
                             sync_settings_entries(s);
                             if s.cat == 2 { sync_codes_entries(s); }
@@ -1308,7 +1307,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 let close_hit = x >= cl && x <= cl + bw2 && y >= bty && y <= bby;
                 let save_hit = x >= sl && x <= sl + bw2 && y >= bty && y <= bby;
                 let cat_add_hit = s.cat == 2 && {
-                    let add_cat_l = CONTENT_L + 14.0;
+                    let add_cat_l = CONTENT_L + HALF_PAD;
                     x >= add_cat_l && x <= add_cat_l + 100.0 && y >= bty && y <= bby
                 };
                 if close_hit != s.close_hovered || save_hit != s.save_hovered || cat_add_hit != s.cat_add_hovered {
@@ -1532,7 +1531,4 @@ pub unsafe fn close_settings() {
     SETTINGS = None;
 }
 
-unsafe fn mk_brush_(d2d: &ID2D1DeviceContext, r: f32, g: f32, b: f32, a: f32) -> Option<ID2D1SolidColorBrush> {
-    let c = D2D1_COLOR_F { r, g, b, a };
-    d2d.CreateSolidColorBrush(&c as *const _, None).ok()
-}
+

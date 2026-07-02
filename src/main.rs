@@ -9,6 +9,7 @@ mod executor;
 mod plugin;
 mod settings;
 mod state;
+mod theme;
 mod widget;
 mod tray;
 mod window;

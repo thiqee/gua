@@ -188,11 +188,10 @@ pub unsafe fn rebuild_text_format(s: &mut AppState) {
     s.status_text_format = None;
     let factory = match gua_renderer(s) { Some(r) => &r.dwrite_factory as *const IDWriteFactory, None => return };
     let family = to_w(&s.font_name);
-    let locale = to_w("en-us");
     let font_size = s.font_size;
     let status_font_size = s.status_font_size;
-    s.text_format = make_text_format(factory, &family, &locale, font_size);
-    s.status_text_format = make_text_format(factory, &family, &locale, status_font_size);
+    s.text_format = make_text_format(factory, &family, &*crate::state::FONT_LOCALE, font_size);
+    s.status_text_format = make_text_format(factory, &family, &*crate::state::FONT_LOCALE, status_font_size);
     if let Some(ref tf) = s.status_text_format {
         let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }

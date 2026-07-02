@@ -97,6 +97,11 @@ use windows::Win32::Foundation::HWND;
 
 /// 单线程 UnsafeCell 包装（无运行时借用检查）
 /// 安全前提：全局状态只在一个线程（主线程消息循环）中访问
+///
+/// # Safety
+/// Sync 是无条件实现的，因为 ST 的所有公开访问方法（r/w）都是 unsafe，
+/// 调用方必须自行保证线程安全。T 中通常包含 !Send/!Sync 的裸指针，
+/// 但在单线程架构下这是安全的。
 struct ST<T>(UnsafeCell<T>);
 unsafe impl<T> Sync for ST<T> {}
 
@@ -113,6 +118,19 @@ static PLUGINS: ST<Vec<LoadedPlugin>> = ST::new(Vec::new());
 static PLUGIN_CONFIGS: ST<Option<HashMap<String, HashMap<String, String>>>> = ST::new(None);
 static TIMER_MAP: ST<Option<HashMap<i32, (usize, i32)>>> = ST::new(None);
 static GUA_HWND: AtomicUsize = AtomicUsize::new(0);
+
+#[allow(static_mut_refs)]
+static mut GUA_API: GuaApi = GuaApi {
+    api_version: 1,
+    struct_size: std::mem::size_of::<GuaApi>() as u32,
+    register_hotkey: Some(register_hotkey_impl),
+    unregister_hotkey: Some(unregister_hotkey_impl),
+    get_config: Some(get_config_impl),
+    set_timer: Some(set_timer_impl),
+    kill_timer: Some(kill_timer_impl),
+    log: Some(log_impl),
+    hwnd: 0,
+};
 
 fn gua_hwnd() -> HWND {
     HWND(GUA_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void)
@@ -268,9 +286,11 @@ pub unsafe fn load_all(
     plugin_configs: &HashMap<String, HashMap<String, String>>,
 ) {
     GUA_HWND.store(hwnd.0 as usize, Ordering::Relaxed);
+    unload_current_plugins();
     *PLUGIN_CONFIGS.w() = Some(plugin_configs.clone());
     *TIMER_MAP.w() = Some(HashMap::new());
     *PLUGINS.w() = Vec::new();
+    GUA_API.hwnd = hwnd.0 as u64;
 
     let plugin_dir = config::config_dir().join("plugins");
     if !plugin_dir.is_dir() {
@@ -319,18 +339,8 @@ pub unsafe fn load_all(
         plog(&format!("{}: 找到 gua_plugin_load", file_stem));
         let load_fn: GuaPluginLoadFn = std::mem::transmute(proc.unwrap());
 
-        // 构造 GuaApi（泄漏到堆上，插件持有 &'static 引用）
-        let gua_api = Box::leak(Box::new(GuaApi {
-            api_version: 1,
-            struct_size: std::mem::size_of::<GuaApi>() as u32,
-            register_hotkey: Some(register_hotkey_impl),
-            unregister_hotkey: Some(unregister_hotkey_impl),
-            get_config: Some(get_config_impl),
-            set_timer: Some(set_timer_impl),
-            kill_timer: Some(kill_timer_impl),
-            log: Some(log_impl),
-            hwnd: hwnd.0 as u64,
-        }));
+        // GuaApi 指针（静态分配，零泄漏）
+        let gua_api = &GUA_API as *const GuaApi;
 
         let mut vtable = PluginVtable {
             vtable_size: 0,
@@ -426,18 +436,7 @@ pub unsafe fn load_all(
 /// # Safety
 /// - 需在窗口销毁后、进程退出前调用，只调用一次
 pub unsafe fn unload_all() {
-    let count = PLUGINS.r().len();
-    for i in (0..count).rev() {
-        let cleanup_fn = PLUGINS.r()[i].vtable.cleanup;
-        let _ = std::panic::catch_unwind(|| {
-            if let Some(f) = cleanup_fn {
-                f();
-            }
-        });
-        unregister_all_for_plugin(i);
-        let lib = PLUGINS.r()[i].lib;
-        let _ = FreeLibrary(lib);
-    }
+    unload_current_plugins();
     PLUGINS.w().clear();
 }
 
@@ -529,6 +528,17 @@ pub fn is_plugin_hotkey(hotkey_id: i32) -> bool {
 }
 
 // ── 内部辅助 ──────────────────────────────────────────────────
+
+unsafe fn unload_current_plugins() {
+    for i in (0..PLUGINS.r().len()).rev() {
+        let cleanup_fn = PLUGINS.r()[i].vtable.cleanup;
+        let _ = std::panic::catch_unwind(|| {
+            if let Some(f) = cleanup_fn { f(); }
+        });
+        unregister_all_for_plugin(i);
+        let _ = FreeLibrary(PLUGINS.r()[i].lib);
+    }
+}
 
 unsafe fn cleanup_plugin(idx: usize) {
     unregister_all_for_plugin(idx);
