@@ -106,7 +106,7 @@ fn main() -> Result<()> {
         if RegisterClassW(&wc) == 0 { return Err(windows::core::Error::from(HRESULT(-2147467259))); }
 
         let cn2 = to_w("Gua");
-        let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
+        let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST;
         let hwnd = CreateWindowExW(
             ex_style,
             PCWSTR(cn2.as_ptr()),

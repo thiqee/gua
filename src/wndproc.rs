@@ -233,10 +233,8 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_ACTIVATE => {
-            if wp.0 == 0 {
-                if s.visible && s.hide_on_focus_loss {
-                    hide_clear(h, s);
-                }
+            if wp.0 == 0 && s.visible && s.hide_on_focus_loss {
+                hide_clear(h, s);
             }
             return DefWindowProcW(h, msg, wp, lp);
         }
