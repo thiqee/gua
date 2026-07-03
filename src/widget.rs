@@ -437,14 +437,21 @@ pub struct TextInput {
     sel_end: usize,
     dwrite_factory: Option<IDWriteFactory>,
     pub settings_key: Option<String>,
+    undo_stack: Vec<(String, usize)>,
 }
 
 impl TextInput {
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None, undo_stack: Vec::new() }
     }
     pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None, undo_stack: Vec::new() }
+    }
+    fn push_undo(&mut self) {
+        self.undo_stack.push((self.text.clone(), self.cursor_pos));
+        if self.undo_stack.len() > 30 {
+            self.undo_stack.remove(0);
+        }
     }
     fn sel_range(&self) -> Option<(usize, usize)> {
         shared_sel_range(self.sel_start, self.sel_end)
@@ -593,6 +600,23 @@ impl Widget for TextInput {
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
     fn on_ctrl_key(&mut self, vk: u32) -> bool {
+        match vk {
+            0x5A => {
+                if let Some((prev_text, prev_cursor)) = self.undo_stack.pop() {
+                    self.text = prev_text;
+                    self.cursor_pos = prev_cursor.min(self.text.len());
+                    self.sel_start = None;
+                    self.sel_end = 0;
+                    self.scroll_x.set(0.0);
+                    self.scroll_hold.set(false);
+                }
+                return true;
+            }
+            0x56 | 0x58 => {
+                self.push_undo();
+            }
+            _ => {}
+        }
         let r = shared_on_ctrl_key(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, &self.scroll_hold, vk);
         if r && vk == 0x41 { self.scroll_x.set(0.0); }
         r
@@ -600,6 +624,10 @@ impl Widget for TextInput {
 
     fn on_key_down(&mut self, vk: u32) -> bool {
         self.scroll_hold.set(false);
+        match vk {
+            0x08 | 0x2E => self.push_undo(),
+            _ => {}
+        }
         let r = shared_on_key_down(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, vk);
         match vk {
             0x08 | 0x2E => { if r && self.text.is_empty() { self.scroll_x.set(0.0); } r }
@@ -612,6 +640,7 @@ impl Widget for TextInput {
         self.scroll_hold.set(false);
         if let Some(c) = char::from_u32(ch) {
             if !c.is_control() {
+                self.push_undo();
                 if self.sel_start.is_some() {
                     self.replace_sel(&c.to_string());
                 } else {
@@ -1048,6 +1077,7 @@ pub struct MultilineTextInput {
     sel_end: usize,
     dwrite_factory: Option<IDWriteFactory>,
     pub settings_key: Option<String>,
+    undo_stack: Vec<(String, usize)>,
 }
 
 impl MultilineTextInput {
@@ -1057,8 +1087,14 @@ impl MultilineTextInput {
     fn replace_sel(&mut self, new: &str) {
         shared_replace_sel(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, new);
     }
+    fn push_undo(&mut self) {
+        self.undo_stack.push((self.text.clone(), self.cursor_pos));
+        if self.undo_stack.len() > 30 {
+            self.undo_stack.remove(0);
+        }
+    }
     pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, scroll_y: std::cell::Cell::new(0.0), content_h: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), hovered: false, cursor_pos: text.len(), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None }
+        Self { r: D2D_RECT_F::default(), text: text.to_string(), focused: false, scroll_y: std::cell::Cell::new(0.0), content_h: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), hovered: false, cursor_pos: text.len(), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None, undo_stack: Vec::new() }
     }
 }
 
@@ -1069,6 +1105,22 @@ impl Widget for MultilineTextInput {
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
 
     fn on_ctrl_key(&mut self, vk: u32) -> bool {
+        match vk {
+            0x5A => {
+                if let Some((prev_text, prev_cursor)) = self.undo_stack.pop() {
+                    self.text = prev_text;
+                    self.cursor_pos = prev_cursor.min(self.text.len());
+                    self.sel_start = None;
+                    self.sel_end = 0;
+                    self.scroll_hold.set(false);
+                }
+                return true;
+            }
+            0x56 | 0x58 => {
+                self.push_undo();
+            }
+            _ => {}
+        }
         shared_on_ctrl_key(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, &self.scroll_hold, vk)
     }
 
@@ -1180,6 +1232,10 @@ impl Widget for MultilineTextInput {
     }
     fn on_key_down(&mut self, vk: u32) -> bool {
         self.scroll_hold.set(false);
+        match vk {
+            0x08 | 0x2E => self.push_undo(),
+            _ => {}
+        }
         if shared_on_key_down(&mut self.text, &mut self.cursor_pos, &mut self.sel_start, &mut self.sel_end, vk) { return true; }
         match vk {
             0x26 => {
@@ -1244,11 +1300,13 @@ impl Widget for MultilineTextInput {
         self.scroll_hold.set(false);
         if let Some(c) = char::from_u32(ch) {
             if c == '\r' {
+                self.push_undo();
                 if self.sel_start.is_some() { self.replace_sel("\n"); }
                 else { self.text.insert(self.cursor_pos, '\n'); self.cursor_pos += 1; }
                 return true;
             }
             if !c.is_control() {
+                self.push_undo();
                 if self.sel_start.is_some() { self.replace_sel(&c.to_string()); }
                 else { self.text.insert(self.cursor_pos, c); self.cursor_pos += c.len_utf8(); }
                 return true;

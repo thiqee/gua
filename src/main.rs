@@ -165,6 +165,7 @@ fn main() -> Result<()> {
             blacklist,
             pinyin_overrides,
             last_hide_time: None,
+            input_undo: Vec::new(),
         };
 
         let boxed = Box::into_raw(Box::new(state));

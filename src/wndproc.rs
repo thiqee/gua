@@ -47,6 +47,13 @@ unsafe fn is_device_lost(hr: &HRESULT) -> bool {
     hr.0 == DXGI_ERROR_DEVICE_REMOVED.0 || hr.0 == DXGI_ERROR_DEVICE_RESET.0 || hr.0 == D2DERR_RECREATE_TARGET
 }
 
+fn push_undo(s: &mut AppState) {
+    s.input_undo.push((s.input_text.clone(), s.cursor_pos));
+    if s.input_undo.len() > 30 {
+        s.input_undo.remove(0);
+    }
+}
+
 pub unsafe extern "system" fn wndproc(
     h: HWND, msg: u32, wp: WPARAM, lp: LPARAM,
 ) -> LRESULT {
@@ -283,6 +290,7 @@ pub unsafe extern "system" fn wndproc(
                         let _ = ImmGetCompositionStringW(himc, GCS_RESULTSTR, buf.as_mut_ptr() as *mut std::ffi::c_void, len);
                         let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
                         let result = String::from_utf16_lossy(&buf[..end]);
+                        push_undo(s);
                         s.input_text.insert_str(s.cursor_pos, &result);
                         s.cursor_pos += result.len();
                         s.composing.clear();
@@ -365,6 +373,7 @@ pub unsafe extern "system" fn wndproc(
                 0x08 => {
                     s.sel_start = None;
                     if s.cursor_pos > 0 {
+                        push_undo(s);
                         let prev = s.input_text.floor_char_boundary(s.cursor_pos - 1);
                         s.input_text.replace_range(prev..s.cursor_pos, "");
                         s.cursor_pos = prev;
@@ -390,6 +399,7 @@ pub unsafe extern "system" fn wndproc(
                 0x2E => {
                     s.sel_start = None;
                     if s.cursor_pos < s.input_text.len() {
+                        push_undo(s);
                         let next = s.input_text.ceil_char_boundary(s.cursor_pos + 1);
                         s.input_text.replace_range(s.cursor_pos..next, "");
                         fill_list(s, h);
@@ -461,6 +471,7 @@ pub unsafe extern "system" fn wndproc(
                             }
                             0x56 => { // Ctrl+V
                                 if let Some(text) = clipboard_paste() {
+                                    push_undo(s);
                                     s.input_text.insert_str(s.cursor_pos, &text);
                                     s.cursor_pos += text.len();
                                     fill_list(s, h);
@@ -468,11 +479,23 @@ pub unsafe extern "system" fn wndproc(
                                 }
                             }
                             0x58 => { // Ctrl+X
+                                push_undo(s);
                                 let _ = clipboard_copy(&s.input_text);
                                 s.input_text.clear();
                                 s.cursor_pos = 0;
                                 fill_list(s, h);
                                 let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                            }
+                            0x5A => { // Ctrl+Z
+                                if let Some((prev_text, prev_cursor)) = s.input_undo.pop() {
+                                    s.input_text = prev_text;
+                                    s.cursor_pos = prev_cursor.min(s.input_text.len());
+                                    s.sel_start = None;
+                                    s.sel_end = 0;
+                                    s.composing.clear();
+                                    fill_list(s, h);
+                                    let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                                }
                             }
                             _ => return DefWindowProcW(h, msg, wp, lp),
                         }
@@ -489,6 +512,7 @@ pub unsafe extern "system" fn wndproc(
                 Some(c) if !c.is_control() => c,
                 _ => { return LRESULT(0); }
             };
+            push_undo(s);
             s.input_text.insert(s.cursor_pos, ch);
             s.cursor_pos += ch.len_utf8();
             fill_list(s, h);

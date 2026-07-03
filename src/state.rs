@@ -457,6 +457,8 @@ pub struct AppState {
     pub pinyin_enabled: bool,
     /// 多音字覆写表：字 → 追加读音列表，匹配时与 crate 默认读音共存
     pub pinyin_overrides: HashMap<char, Vec<String>>,
+    /// 输入框撤销栈
+    pub input_undo: Vec<(String, usize)>,
 }
 
 // ── 私有字体加载 ────────────────────────────────────────────────

@@ -241,6 +241,7 @@ pub unsafe fn hide_clear(h: HWND, s: &mut AppState) {
     s.scroll_offset = 0;
     s.search_query.clear();
     s.composing.clear();
+    s.input_undo.clear();
     let _ = ShowWindow(h, SW_HIDE);
     let hp = GetCurrentProcess();
     let prio = MemPrio { priority: MEM_PRIO_VERY_LOW };
