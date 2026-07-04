@@ -369,8 +369,14 @@ pub unsafe extern "system" fn wndproc(
                     return LRESULT(0);
                 }
                 0x08 => {
-                    s.sel_start = None;
-                    if s.cursor_pos > 0 {
+                    if let Some((lo, hi)) = s.sel_start.map(|ss| (ss.min(s.sel_end), ss.max(s.sel_end))) {
+                        push_undo(s);
+                        s.input_text.replace_range(lo..hi, "");
+                        s.cursor_pos = lo;
+                        s.sel_start = None;
+                        fill_list(s, h);
+                        let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                    } else if s.cursor_pos > 0 {
                         push_undo(s);
                         let prev = s.input_text.floor_char_boundary(s.cursor_pos - 1);
                         s.input_text.replace_range(prev..s.cursor_pos, "");
@@ -395,8 +401,14 @@ pub unsafe extern "system" fn wndproc(
                     return LRESULT(0);
                 }
                 0x2E => {
-                    s.sel_start = None;
-                    if s.cursor_pos < s.input_text.len() {
+                    if let Some((lo, hi)) = s.sel_start.map(|ss| (ss.min(s.sel_end), ss.max(s.sel_end))) {
+                        push_undo(s);
+                        s.input_text.replace_range(lo..hi, "");
+                        s.cursor_pos = lo;
+                        s.sel_start = None;
+                        fill_list(s, h);
+                        let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+                    } else if s.cursor_pos < s.input_text.len() {
                         push_undo(s);
                         let next = s.input_text.ceil_char_boundary(s.cursor_pos + 1);
                         s.input_text.replace_range(s.cursor_pos..next, "");
@@ -470,8 +482,14 @@ pub unsafe extern "system" fn wndproc(
                             0x56 => { // Ctrl+V
                                 if let Some(text) = clipboard_paste() {
                                     push_undo(s);
-                                    s.input_text.insert_str(s.cursor_pos, &text);
-                                    s.cursor_pos += text.len();
+                                    if let Some((lo, hi)) = s.sel_start.map(|ss| (ss.min(s.sel_end), ss.max(s.sel_end))) {
+                                        s.input_text.replace_range(lo..hi, &text);
+                                        s.cursor_pos = lo + text.len();
+                                        s.sel_start = None;
+                                    } else {
+                                        s.input_text.insert_str(s.cursor_pos, &text);
+                                        s.cursor_pos += text.len();
+                                    }
                                     fill_list(s, h);
                                     let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                                 }
@@ -505,14 +523,19 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_CHAR => {
-            s.sel_start = None;
             let ch = match char::from_u32(wp.0 as u32) {
                 Some(c) if !c.is_control() => c,
                 _ => { return LRESULT(0); }
             };
             push_undo(s);
-            s.input_text.insert(s.cursor_pos, ch);
-            s.cursor_pos += ch.len_utf8();
+            if let Some((lo, hi)) = s.sel_start.map(|ss| (ss.min(s.sel_end), ss.max(s.sel_end))) {
+                s.input_text.replace_range(lo..hi, &ch.to_string());
+                s.cursor_pos = lo + ch.len_utf8();
+                s.sel_start = None;
+            } else {
+                s.input_text.insert(s.cursor_pos, ch);
+                s.cursor_pos += ch.len_utf8();
+            }
             fill_list(s, h);
             let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             return LRESULT(0);
