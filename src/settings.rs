@@ -523,7 +523,6 @@ unsafe fn build_codes_tab(
     let col_key_w = 90.0;
     let col_val_w = 230.0;
     let del_w = 24.0;
-    let _col_desc_w = inner_w - col_key_w - col_val_w - del_w - 20.0;
     let menu_btn_w = 44.0;
 
     for (ci, (cat_name, cat_entries)) in cat_map.iter().enumerate() {
