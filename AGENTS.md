@@ -82,3 +82,8 @@ If search returns 0 results, proceed as a fresh session.
 | `ctx purge` | Call `purge` MCP tool with confirm: true. Warns before wiping knowledge base. |
 
 After /clear or /compact: knowledge base and session stats preserved. Use `ctx purge` to start fresh.
+
+## Git 提交规则
+
+**仅当用户明确说出"提交"、"commit"、"push"时才执行 git commit/push。**
+未经许可绝不进行任何 git 提交操作。工作完成后只列出改动的文件清单，等待用户指令。若用户要求"记住"某条规则，必须记录到本文件。

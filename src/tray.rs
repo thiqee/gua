@@ -12,7 +12,6 @@ static GUA_ICO_DATA: &[u8] = include_bytes!("../gua.ico");
 
 const TRAY_MSG: u32 = super::TRAY_MSG;
 const TRAY_ID: u32 = super::TRAY_ID;
-const IDM_TOGGLE: u16 = super::IDM_TOGGLE;
 const IDM_OPEN_CONFIG: u16 = super::IDM_OPEN_CONFIG;
 const IDM_EXIT: u16 = super::IDM_EXIT;
 const IDM_SETTINGS: u16 = super::IDM_SETTINGS;

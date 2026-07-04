@@ -23,9 +23,7 @@ extern "system" {
     fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
 }
 
-use crate::config;
 use crate::executor;
-use crate::plugin;
 use crate::state::*;
 
 /// 创建 D2D 渲染器（Composition SwapChain + DComp，透明圆角均正常工作）
@@ -321,108 +319,6 @@ pub unsafe fn rebuild_font(s: &mut AppState, dpi: i32) {
     rebuild_text_format(s);
 }
 
-/// 热重载配置
-pub unsafe fn reload_config(h: HWND, s: &mut AppState) -> (bool, String, f32) {
-    let set_path = config::settings_path();
-    let cur = std::fs::metadata(&set_path)
-        .ok()
-        .and_then(|m| m.modified().ok());
-    let mut font_name = s.font_name.clone();
-    let mut font_size = s.font_size;
-    let config_changed = s.config_mtime != cur;
-    if config_changed {
-        let settings = config::load_settings();
-        let has_explicit_font = settings.iter().any(|e| e.key == "_font");
-        let private_font_name = load_private_fonts();
-        font_name = if has_explicit_font {
-            cfg_str(&settings, "_font", &s.font_name)
-        } else {
-            private_font_name.unwrap_or_else(|| cfg_str(&settings, "_font", &s.font_name))
-        };
-        font_size = cfg_f32(&settings, "_font_size", s.font_size);
-        s.max_results = cfg_usize(&settings, "_max_results", s.max_results);
-        s.width = cfg_i32(&settings, "_width", s.width);
-        s.round_corner = cfg_i32(&settings, "_round_corner", s.round_corner);
-        s.hide_on_focus_loss = cfg_bool(&settings, "_hide_on_focus_loss", s.hide_on_focus_loss);
-        let old_theme = s.theme_color;
-        let old_input_bg = s.input_bg_color;
-        let old_accent = s.accent_color;
-        let old_text = s.text_color;
-        let old_opacity = s.opacity;
-        s.theme_color = cfg_color(&settings, "_theme_color", s.theme_color);
-        s.input_bg_color = cfg_color(&settings, "_input_bg_color", s.input_bg_color);
-        s.accent_color = cfg_color(&settings, "_accent_color", s.accent_color);
-        s.text_color = cfg_color(&settings, "_text_color", s.text_color);
-        let old_status_font_size = s.status_font_size;
-        s.status_font_size = cfg_f32(&settings, "_status_font_size", s.status_font_size);
-        s.opacity = cfg_usize(&settings, "_opacity", s.opacity as usize).min(255) as u8;
-        s.case_sensitive = cfg_bool(&settings, "_case_sensitive", s.case_sensitive);
-        s.fuzzy_enabled = cfg_bool(&settings, "_fuzzy_match", s.fuzzy_enabled);
-        s.pinyin_enabled = cfg_bool(&settings, "_pinyin_search", s.pinyin_enabled);
-        s.panel_ratio_x = cfg_f32(&settings, "_panel_position_x", 50.0).clamp(0.0, 100.0) / 100.0;
-        s.panel_ratio_y = cfg_f32(&settings, "_panel_position_y", 50.0).clamp(0.0, 100.0) / 100.0;
-
-        // 更新画刷颜色（SetColor 不重建）
-        if old_theme != s.theme_color || old_opacity != s.opacity {
-            if let Some(ref brush) = s.theme_brush {
-                let c = color_to_d2d(s.theme_color, s.opacity as f32 / 255.0);
-                brush.SetColor(&c as *const _);
-            }
-        }
-        if old_input_bg != s.input_bg_color || old_opacity != s.opacity {
-            if let Some(ref brush) = s.input_bg_brush {
-                let c = color_to_d2d(s.input_bg_color, s.opacity as f32 / 255.0);
-                brush.SetColor(&c as *const _);
-            }
-        }
-        if old_accent != s.accent_color {
-            if let Some(ref brush) = s.accent_brush {
-                let c = color_to_d2d(s.accent_color, 1.0);
-                brush.SetColor(&c as *const _);
-            }
-        }
-        if old_text != s.text_color {
-            if let Some(ref brush) = s.text_brush {
-                let c = color_to_d2d(s.text_color, 1.0);
-                brush.SetColor(&c as *const _);
-            }
-        }
-
-        // 状态栏字号变更时重建 TextFormat
-        if (old_status_font_size - s.status_font_size).abs() > 0.1 {
-            rebuild_text_format(s);
-        }
-
-        // 热键变更
-        let new_hotkey_str = cfg_str(&settings, "_hotkey", "Alt+Space");
-        if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey_str) {
-            if new_mod != s.mod_keys || new_vk != s.hotkey_vk {
-                let _ = UnregisterHotKey(h, HOTKEY_ID);
-                if RegisterHotKey(h, HOTKEY_ID, new_mod, new_vk).as_bool() {
-                    s.mod_keys = new_mod;
-                    s.hotkey_vk = new_vk;
-                } else {
-                    eprintln!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键");
-                    let _ = std::fs::write(config::config_dir().join("panic.log"), format!("config: 新热键 \"{new_hotkey_str}\" 注册失败，恢复原热键\n"));
-                    let _ = RegisterHotKey(h, HOTKEY_ID, s.mod_keys, s.hotkey_vk);
-                }
-            }
-        } else {
-            eprintln!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键");
-            let _ = std::fs::write(config::config_dir().join("panic.log"), format!("config: 新热键 \"{new_hotkey_str}\" 无法识别，保持原热键\n"));
-        }
-
-        s.blacklist = cfg_blacklist(&settings, "_blacklist");
-        s.pinyin_overrides = cfg_pinyin_overrides(&settings, "_pinyin_overrides");
-        let plugin_configs = config::build_plugin_configs(&settings);
-        s.entries = config::load_codes();
-        s.config_mtime = cur;
-        plugin::notify_reload(&plugin_configs);
-
-    }
-    (config_changed, font_name, font_size)
-}
-
 /// 切换窗口可见状态
 pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
     if !s.blacklist.is_empty() {
@@ -440,14 +336,6 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         let prio = MemPrio { priority: MEM_PRIO_NORMAL };
         let _ = SetProcessInformation(hp, PROCESS_MEMORY_PRIORITY, &prio as *const _ as *const u8, mem::size_of::<MemPrio>() as u32);
 
-        let (config_changed, font_name, font_size) = reload_config(h, s);
-
-        if s.font_name != font_name || (s.font_size - font_size).abs() > 0.5 {
-            s.font_name = font_name;
-            s.font_size = font_size;
-            rebuild_font(s, s.dpi);
-        }
-
         s.visible = true;
         s.input_text.clear();
         s.cursor_pos = 0;
@@ -456,10 +344,8 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
         s.scroll_offset = 0;
         fill_list(s, h);
 
-        if config_changed || s.config_mtime.is_none() {
-            let sh = status_bar_h(s.dpi, s.status_font_size);
-            center_win(h, s.width, win_h(0, s.item_h, s.eh, s.max_results, sh), s.panel_ratio_x, s.panel_ratio_y);
-        }
+        let sh = status_bar_h(s.dpi, s.status_font_size);
+        center_win(h, s.width, win_h(s.filtered_indices.len(), s.item_h, s.eh, s.max_results, sh), s.panel_ratio_x, s.panel_ratio_y);
 
         let _ = ShowWindow(h, SW_SHOW);
         let _ = SetForegroundWindow(h);
@@ -468,7 +354,6 @@ pub unsafe fn toggle_win(h: HWND, s: &mut AppState) {
             let _ = SetForegroundWindow(h);
         }
         let _ = SetFocus(h);
-        // 强制立即重绘
         let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
     }
 }

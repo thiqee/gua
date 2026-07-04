@@ -19,13 +19,11 @@ pub enum WidgetCmd {
     None,
     EntryDel(usize),
     EntryAdd(usize),
-    CatMenu(usize),
     CatToggle(usize),
     ExpandAll,
     CollapseAll,
     CatRename(usize),
     CatDelete(usize),
-    CatAdd,
     FontRefresh,
     FontOpen,
 }
@@ -38,6 +36,7 @@ pub trait Widget {
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_up(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_move(&mut self, x: f32, y: f32);
+    #[allow(dead_code)]
     fn on_mouse_leave(&mut self);
     fn on_key_down(&mut self, _vk: u32) -> bool { false }
     fn on_char(&mut self, _ch: u32) -> bool { false }
@@ -210,23 +209,6 @@ pub fn byte_to_utf16(text: &str, byte_pos: usize) -> usize {
     u16_sum
 }
 
-fn cursor_from_x(dwrite: &IDWriteFactory, tf: &IDWriteTextFormat, text: &str, x: f32, layout_w: f32) -> usize {
-    if text.is_empty() || x <= 0.0 { return 0; }
-    let ws: Vec<u16> = text.encode_utf16().collect();
-    let lw = layout_w.max(1.0);
-    if let Ok(layout) = unsafe { dwrite.CreateTextLayout(&ws, tf, lw, 10000.0) } {
-        let mut is_trailing = BOOL::default();
-        let mut is_inside = BOOL::default();
-        let mut hit = DWRITE_HIT_TEST_METRICS::default();
-        let _ = unsafe { layout.HitTestPoint(x.clamp(0.0, lw), 0.0, &mut is_trailing, &mut is_inside, &mut hit) };
-        let mut utf16_pos = hit.textPosition as usize;
-        if is_trailing.as_bool() { utf16_pos += hit.length as usize; }
-        utf16_to_byte(text, utf16_pos)
-    } else {
-        text.len()
-    }
-}
-
 fn tf_center(dwrite: &IDWriteFactory, sz: f32) -> Option<IDWriteTextFormat> {
     let tf = make_tf(dwrite, sz)?;
     unsafe {
@@ -380,45 +362,6 @@ impl Widget for ToggleSwitch {
     }
 }
 
-// ── TextButton ──
-
-pub struct TextButton {
-    r: D2D_RECT_F,
-    pub text: String,
-    pub hovered: bool,
-}
-
-impl TextButton {
-    pub fn new(text: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), hovered: false }
-    }
-}
-
-impl Widget for TextButton {
-    fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
-    fn bounds(&self) -> D2D_RECT_F { self.r }
-    fn on_mouse_move(&mut self, x: f32, y: f32) { self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom; }
-    fn on_mouse_leave(&mut self) { self.hovered = false; }
-    fn set_focused(&mut self, _val: bool) {}
-    fn on_click(&mut self, x: f32, y: f32) -> bool {
-        if !(x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom) { return false; }
-        true
-    }
-
-    fn draw(&self, res: &D2DRes) {
-        let rr = D2D1_ROUNDED_RECT { rect: self.r, radiusX: 6.0, radiusY: 6.0 };
-        let c = if self.hovered { T.accent_light } else { T.accent };
-        if let Some(b) = brush(&res.d2d, c, 1.0) {
-            unsafe { res.d2d.FillRoundedRectangle(&rr as *const _, &b); }
-        }
-        if let Some(tf) = tf_center(&res.dwrite, 14.0) {
-            if let Some(b) = brush(&res.d2d, T.text_white, 1.0) {
-                draw_text(&res.d2d, &self.text, &tf, &self.r, &b);
-            }
-        }
-    }
-}
-
 // ── TextInput ──
 
 pub struct TextInput {
@@ -443,9 +386,6 @@ pub struct TextInput {
 impl TextInput {
     pub fn new(text: &str) -> Self {
         Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: String::new(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None, undo_stack: Vec::new() }
-    }
-    pub fn with_placeholder(text: &str, placeholder: &str) -> Self {
-        Self { r: D2D_RECT_F::default(), text: text.to_string(), placeholder: placeholder.to_string(), focused: false, cursor_pos: text.len(), hovered: false, center: false, select_on_focus: true, scroll_x: std::cell::Cell::new(0.0), scroll_hold: std::cell::Cell::new(true), mouse_down: false, sel_start: None, sel_end: 0, dwrite_factory: None, settings_key: None, undo_stack: Vec::new() }
     }
     fn push_undo(&mut self) {
         self.undo_stack.push((self.text.clone(), self.cursor_pos));
@@ -564,6 +504,7 @@ impl Widget for TextInput {
                 self.sel_start = Some(0);
                 self.sel_end = self.text.len();
                 self.cursor_pos = self.text.len();
+                self.scroll_x.set(0.0);
             }
         }
         let use_center = if self.center {
@@ -593,7 +534,7 @@ impl Widget for TextInput {
 
     fn set_focused(&mut self, val: bool) {
         self.focused = val;
-        if !val { self.scroll_hold.set(true); self.sel_start = None; self.mouse_down = false; }
+        if !val { self.scroll_hold.set(true); self.scroll_x.set(0.0); self.cursor_pos = 0; self.sel_start = None; self.mouse_down = false; }
     }
     fn focused(&self) -> bool { self.focused }
     fn text(&self) -> &str { &self.text }
@@ -845,6 +786,7 @@ impl Widget for ThreeDotsButton {
     fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
     fn bounds(&self) -> D2D_RECT_F { self.r }
     fn set_focused(&mut self, _val: bool) {}
+    fn focused(&self) -> bool { self.open }
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
         self.hovered = -1;
@@ -861,23 +803,25 @@ impl Widget for ThreeDotsButton {
     fn on_mouse_leave(&mut self) { self.hovered = -1; }
 
     fn on_click_with(&mut self, x: f32, y: f32, _res: &D2DRes) -> bool {
-        if !self.open || self.items.is_empty() { return false; }
-        let popup_l = self.r.right - 136.0;
-        let popup_t = self.r.top + 34.0;
-        let item_h = 28.0;
-        let popup_h = self.items.len() as f32 * item_h + 8.0;
-        if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
-            let mi = ((y - popup_t - 4.0) / item_h) as usize;
-            if mi < self.items.len() {
-                self.selected = Some(mi);
-                self.open = false;
-                return true;
+        let in_btn = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom;
+        if self.open {
+            let popup_l = self.r.right - 136.0;
+            let popup_t = self.r.top + 34.0;
+            let item_h = 28.0;
+            let popup_h = self.items.len() as f32 * item_h + 8.0;
+            if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
+                let mi = ((y - popup_t - 4.0) / item_h) as usize;
+                if mi < self.items.len() {
+                    self.selected = Some(mi);
+                    self.open = false;
+                    return true;
+                }
             }
+            self.open = false;
+            return false;
         }
-        self.open = false;
-        return false;
-        if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
-            self.open = !self.open;
+        if in_btn {
+            self.open = true;
             self.selected = None;
             return true;
         }
@@ -939,11 +883,6 @@ pub struct RefreshButton {
 impl RefreshButton {
     pub fn new() -> Self {
         Self { r: D2D_RECT_F::default(), hovered: false, state: 0, start: None, ticks: 0, cmd: WidgetCmd::FontRefresh }
-    }
-    pub fn reset(&mut self) {
-        self.state = 0;
-        self.start = None;
-        self.ticks = 0;
     }
 }
 

@@ -479,6 +479,7 @@ pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
     false
 }
 
+#[allow(dead_code)]
 /// 通知所有插件配置已重载
 ///
 /// # Safety
@@ -571,6 +572,7 @@ unsafe fn unregister_all_for_plugin(idx: usize) {
     }
 }
 
+#[allow(dead_code)]
 /// 获取 gua.exe 所在目录
 fn get_exe_dir() -> Option<std::path::PathBuf> {
     std::env::current_exe()

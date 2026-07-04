@@ -28,7 +28,7 @@ pub fn default_entries() -> Vec<Entry> {
         Entry { key: "_max_results".into(),        value: "8".into(),               category: None, description: None },
         Entry { key: "_round_corner".into(),       value: "12".into(),              category: None, description: None },
         Entry { key: "_opacity".into(),            value: "255".into(),             category: None, description: None },
-        Entry { key: "_case_sensitive".into(),     value: "true".into(),            category: None, description: None },
+        Entry { key: "_case_sensitive".into(),     value: "false".into(),           category: None, description: None },
         Entry { key: "_fuzzy_match".into(),        value: "true".into(),            category: None, description: None },
         Entry { key: "_pinyin_search".into(),      value: "true".into(),            category: None, description: None },
         Entry { key: "_hide_on_focus_loss".into(), value: "true".into(),            category: None, description: None },

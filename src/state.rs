@@ -436,7 +436,6 @@ pub struct AppState {
     pub renderer: *mut GuaRenderer,
     pub device_recover_attempts: u32,
     pub composing: String,
-    pub config_mtime: Option<std::time::SystemTime>,
     /// 面板水平位置比例 0.0~1.0，由 _panel_position_x 配置计算
     pub panel_ratio_x: f32,
     /// 面板垂直位置比例 0.0~1.0，由 _panel_position_y 配置计算

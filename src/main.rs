@@ -3,6 +3,7 @@
 
 #![cfg(target_os = "windows")]
 #![windows_subsystem = "windows"]
+#![allow(static_mut_refs)]
 mod config;
 mod draw;
 mod executor;
@@ -67,7 +68,7 @@ fn main() -> Result<()> {
         let max_results = cfg_usize(&settings, "_max_results", MV);
         let round_corner = cfg_i32(&settings, "_round_corner", 12);
         let opacity = cfg_usize(&settings, "_opacity", 255).min(255) as u8;
-        let case_sensitive = cfg_bool(&settings, "_case_sensitive", true);
+        let case_sensitive = cfg_bool(&settings, "_case_sensitive", false);
         let fuzzy_enabled = cfg_bool(&settings, "_fuzzy_match", FUZZY_MATCH_DEFAULT);
         let pinyin_enabled = cfg_bool(&settings, "_pinyin_search", PINYIN_SEARCH_DEFAULT);
         let pinyin_overrides = cfg_pinyin_overrides(&settings, "_pinyin_overrides");
@@ -156,7 +157,6 @@ fn main() -> Result<()> {
             renderer: ptr::null_mut(),
             device_recover_attempts: 0,
             composing: String::new(),
-            config_mtime: None,
             panel_ratio_x,
             panel_ratio_y,
             codes_cat_state: Vec::new(),

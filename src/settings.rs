@@ -83,6 +83,7 @@ pub struct SettingsWin {
     cat_renaming: Option<usize>,
     cat_renaming_old: String,
     save_msg: String,
+    popup_idx: Option<usize>,
 }
 
 #[allow(static_mut_refs)]
@@ -119,7 +120,7 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
 
     let inp_l = 96.0;
     let inp_w = 152.0;
-    let wide_l = 116.0;
+    let _wide_l = 116.0;
     let tog_l = inner_l + inner_w - 48.0;
 
     fn sv(settings: &[config::Entry], key: &str, default: &str) -> String {
@@ -147,7 +148,7 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
                 ("失去焦点自动隐藏", "_hide_on_focus_loss", sb(settings, "_hide_on_focus_loss", true)),
                 ("模糊匹配", "_fuzzy_match", sb(settings, "_fuzzy_match", true)),
                 ("拼音搜索", "_pinyin_search", sb(settings, "_pinyin_search", true)),
-                ("区分大小写", "_case_sensitive", sb(settings, "_case_sensitive", true)),
+                ("区分大小写", "_case_sensitive", sb(settings, "_case_sensitive", false)),
             ];
             for (i, (label, key, checked)) in toggles.iter().enumerate() {
                 let row_y = y + 10.0 + i as f32 * ROW_GAP;
@@ -351,7 +352,7 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
         state.font_name = new_font;
         state.font_size = new_font_size;
         state.status_font_size = new_status_fs;
-        window::rebuild_text_format(state);
+        window::rebuild_font(state, state.dpi);
     }
     state.max_results = cfg_usize(&settings, "_max_results", state.max_results);
     state.width = cfg_i32(&settings, "_width", state.width);
@@ -426,6 +427,17 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
     s.save_msg = if hotkey_err { "热键注册失败，请更换快捷键".to_string() } else { "保存成功".to_string() };
     let _ = SetTimer(Some(h), 100, 1500, None);
     let _ = InvalidateRect(Some(h), None, true);
+
+    // 即时应用宽度/位置变化（主窗口可见时）
+    let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    if !main_hwnd.0.is_null() && IsWindowVisible(main_hwnd).as_bool() {
+        let state = &mut *state_ptr;
+        let mut rc = RECT::default();
+        let _ = GetWindowRect(main_hwnd, &mut rc);
+        let cur_h = rc.bottom - rc.top;
+        center_win(main_hwnd, state.width, cur_h, state.panel_ratio_x, state.panel_ratio_y);
+        let _ = InvalidateRect(Some(main_hwnd), None, false);
+    }
 
     if destroy {
         SETTINGS = None;
@@ -511,7 +523,7 @@ unsafe fn build_codes_tab(
     let col_key_w = 90.0;
     let col_val_w = 230.0;
     let del_w = 24.0;
-    let col_desc_w = inner_w - col_key_w - col_val_w - del_w - 20.0;
+    let _col_desc_w = inner_w - col_key_w - col_val_w - del_w - 20.0;
     let menu_btn_w = 44.0;
 
     for (ci, (cat_name, cat_entries)) in cat_map.iter().enumerate() {
@@ -536,14 +548,14 @@ unsafe fn build_codes_tab(
             w.push(Box::new(name_lbl));
         }
 
+        let mut menu_btn = ThreeDotsButton::new(&["重命名分类", "删除分类"], ci);
+        menu_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w, top: y, right: inner_l + inner_w, bottom: y + row_h });
+        w.push(Box::new(menu_btn));
+
         let mut add_btn = IconButton::new("＋添加识别码");
         add_btn.cmd = WidgetCmd::EntryAdd(ci);
         add_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w - 100.0, top: y, right: inner_l + inner_w - menu_btn_w - 4.0, bottom: y + row_h });
         w.push(Box::new(add_btn));
-
-        let mut menu_btn = ThreeDotsButton::new(&["重命名分类", "删除分类"], ci);
-        menu_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - menu_btn_w, top: y, right: inner_l + inner_w, bottom: y + row_h });
-        w.push(Box::new(menu_btn));
         y += row_h + 4.0;
 
         cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: y });
@@ -614,7 +626,7 @@ unsafe fn build_codes_tab(
     w
 }
 
-pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
+pub unsafe fn open_settings(_h: HWND, r: &GuaRenderer) {
     if let Some(ref s) = SETTINGS {
         let _ = ShowWindow(s.hwnd, SW_SHOW);
         let _ = SetForegroundWindow(s.hwnd);
@@ -689,6 +701,7 @@ pub unsafe fn open_settings(h: HWND, r: &GuaRenderer) {
         cat_renaming: None,
         cat_renaming_old: String::new(),
         save_msg: String::new(),
+        popup_idx: None,
     };
     SETTINGS = Some(win);
     let _ = ShowWindow(hwnd_s, SW_SHOW);
@@ -1076,6 +1089,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                             sync_settings_entries(s);
                             if s.cat == 2 { sync_codes_entries(s); }
                             clear_focus(s);
+                            s.popup_idx = None;
                             s.cat = i;
                             let _ = InvalidateRect(Some(h), None, true);
                             break;
@@ -1243,19 +1257,28 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                 _ => {}
                             }
                         }
+                        // Track popup widget for hover isolation
+                        if s.widgets[handled_idx].focused() && matches!(s.widgets[handled_idx].cmd(), WidgetCmd::None) {
+                            s.popup_idx = Some(handled_idx);
+                        } else {
+                            s.popup_idx = None;
+                        }
                         // Non-focusable click → clear focus
                         if !s.widgets[handled_idx].focused() {
                             if let Some(oi) = old_idx {
                                 if oi < s.widgets.len() { s.widgets[oi].set_focused(false); }
                             }
                             s.focused_idx = None;
-                            s.cat_renaming = None;
-                            s.cat_renaming_old.clear();
+                            if !matches!(s.widgets[handled_idx].cmd(), WidgetCmd::CatRename(_)) {
+                                s.cat_renaming = None;
+                                s.cat_renaming_old.clear();
+                            }
                             s.codes_version += 1;
                         }
                         let _ = InvalidateRect(Some(h), None, true);
                     }
                     if !handled {
+                        s.popup_idx = None;
                         if s.cat_renaming.is_some() {
                             s.cat_renaming = None;
                             s.cat_renaming_old.clear();
@@ -1316,7 +1339,13 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                     s.cat_add_hovered = cat_add_hit;
                     let _ = InvalidateRect(Some(h), None, true);
                 }
-                for w in &mut s.widgets { w.on_mouse_move(x, adj_y); }
+                if let Some(idx) = s.popup_idx {
+                    if idx < s.widgets.len() {
+                        s.widgets[idx].on_mouse_move(x, adj_y);
+                    }
+                } else {
+                    for w in &mut s.widgets { w.on_mouse_move(x, adj_y); }
+                }
                 let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             }
             return LRESULT(0);
@@ -1356,8 +1385,13 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         0x1B => { clear_focus(s); let _ = InvalidateRect(Some(h), None, true); }
                         0x10 | 0x11 | 0x12 | 0x5B | 0x5C => {}
                         _ => {
-                            if s.mod_held.iter().any(|&m| m) {
-                                let hotkey_str = format_hotkey_string(vk, &s.mod_held);
+                            let ctrl = (GetAsyncKeyState(0x11) as i16) < 0;
+                            let alt = (GetAsyncKeyState(0x12) as i16) < 0;
+                            let shift = (GetAsyncKeyState(0x10) as i16) < 0;
+                            let win = (GetAsyncKeyState(0x5B) as i16) < 0 || (GetAsyncKeyState(0x5C) as i16) < 0;
+                            let mods = [ctrl, alt, shift, win];
+                            if mods.iter().any(|&m| m) {
+                                let hotkey_str = format_hotkey_string(vk, &mods);
                                 if !hotkey_str.is_empty() {
                                     let idx = s.focused_idx;
                                     clear_focus(s);
@@ -1508,7 +1542,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let y_screen = ((lp.0 as u32 >> 16) & 0xFFFF) as i32;
             let mut rc = RECT::default();
             let _ = GetWindowRect(h, &mut rc);
-            let rel_x = x_screen - rc.left;
+            let _rel_x = x_screen - rc.left;
             let rel_y = y_screen - rc.top;
             if rel_y >= 0 && rel_y < TITLE_H as i32 {
                 return LRESULT(HTCAPTION as isize);
@@ -1522,8 +1556,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
     DefWindowProcW(h, msg, wp, lp)
 }
 
+#[allow(dead_code)]
 pub unsafe fn is_open() -> bool { SETTINGS.is_some() }
 
+#[allow(dead_code)]
 pub unsafe fn close_settings() {
     if let Some(ref s) = SETTINGS {
         let _ = DestroyWindow(s.hwnd);
