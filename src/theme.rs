@@ -62,7 +62,7 @@ const DARK: &Theme = &Theme {
     placeholder:   hex(0xCCCCCC),
 };
 
-pub static T: &Theme = &DARK;
+pub static T: &Theme = DARK;
 
 pub fn brush(d2d: &ID2D1DeviceContext, c: Color, a: f32) -> Option<ID2D1SolidColorBrush> {
     let cf = D2D1_COLOR_F { r: c.0, g: c.1, b: c.2, a };

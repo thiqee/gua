@@ -105,7 +105,7 @@ pub unsafe fn create_renderer(hwnd: HWND, s: &AppState) -> Result<GuaRenderer> {
     let mut dcomp_visual: Option<IDCompositionVisual> = None;
     let mut dcomp_target: Option<IDCompositionTarget> = None;
     if let Some(ref dcomp) = dcomp_device {
-        if let Some(v) = dcomp.CreateVisual().ok() {
+        if let Ok(v) = dcomp.CreateVisual() {
             let _ = v.SetContent(&swap_chain);
             if let Ok(t) = dcomp.CreateTargetForHwnd(hwnd, true) {
                 let _ = t.SetRoot(&v);
@@ -187,8 +187,8 @@ pub unsafe fn rebuild_text_format(s: &mut AppState) {
     let family = to_w(&s.font_name);
     let font_size = s.font_size;
     let status_font_size = s.status_font_size;
-    s.text_format = make_text_format(factory, &family, &*crate::state::FONT_LOCALE, font_size);
-    s.status_text_format = make_text_format(factory, &family, &*crate::state::FONT_LOCALE, status_font_size);
+    s.text_format = make_text_format(factory, &family, &crate::state::FONT_LOCALE, font_size);
+    s.status_text_format = make_text_format(factory, &family, &crate::state::FONT_LOCALE, status_font_size);
     if let Some(ref tf) = s.status_text_format {
         let _ = tf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }

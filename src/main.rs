@@ -204,7 +204,7 @@ fn main() -> Result<()> {
             let ret = GetMessageW(&mut msg, None, 0, 0);
             if ret.0 == 0 || ret.0 == -1 { break; }
             let _ = TranslateMessage(&msg);
-            DispatchMessageW(&mut msg);
+            DispatchMessageW(&msg);
         }
 
         plugin::unload_all();

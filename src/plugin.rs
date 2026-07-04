@@ -21,7 +21,9 @@ fn plog(msg: &str) {
 
 // ── Win32 extern ──────────────────────────────────────────────
 
+#[allow(clippy::upper_case_acronyms)]
 type HMODULE = *mut std::ffi::c_void;
+#[allow(clippy::upper_case_acronyms)]
 type FARPROC = Option<unsafe extern "system" fn() -> isize>;
 
 #[link(name = "kernel32")]
@@ -116,6 +118,7 @@ impl<T> ST<T> {
     /// 获取不可变引用（单线程安全，无并发写入）
     unsafe fn r(&self) -> &T { &*self.0.get() }
     /// 获取可变引用（单线程安全，无并发读取）
+    #[allow(clippy::mut_from_ref)]
     unsafe fn w(&self) -> &mut T { &mut *self.0.get() }
 }
 
@@ -143,7 +146,7 @@ fn gua_hwnd() -> HWND {
 }
 
 thread_local! {
-    static CURRENT_PLUGIN_IDX: Cell<usize> = Cell::new(usize::MAX);
+    static CURRENT_PLUGIN_IDX: Cell<usize> = const { Cell::new(usize::MAX) };
 }
 
 // ── GuaApi 实现 ───────────────────────────────────────────────
@@ -154,7 +157,7 @@ unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i
         plog("register_hotkey: 不在插件上下文中");
         return -1;
     }
-    if user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+    if !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
         plog(&format!("register_hotkey: user_id {} 超出范围", user_id));
         return -1;
     }
@@ -228,7 +231,7 @@ unsafe extern "C" fn get_config_impl(key: *const i8, buf: *mut i8, buf_size: i32
 
 unsafe extern "C" fn set_timer_impl(interval_ms: u32, user_id: i32) -> i32 {
     let idx = CURRENT_PLUGIN_IDX.get();
-    if idx == usize::MAX || user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+    if idx == usize::MAX || !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
         return -1;
     }
     let timer_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + 256 + user_id;
@@ -243,7 +246,7 @@ unsafe extern "C" fn set_timer_impl(interval_ms: u32, user_id: i32) -> i32 {
 
 unsafe extern "C" fn kill_timer_impl(user_id: i32) {
     let idx = CURRENT_PLUGIN_IDX.get();
-    if idx == usize::MAX || user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+    if idx == usize::MAX || !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
         return;
     }
     let timer_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + 256 + user_id;
@@ -364,7 +367,7 @@ pub unsafe fn load_all(
         CURRENT_PLUGIN_IDX.set(idx);
         plog(&format!("{}: 调用 gua_plugin_load...", file_stem));
 
-        let ret = load_fn(gua_api as *const GuaApi, &mut vtable as *mut PluginVtable);
+        let ret = load_fn(gua_api, &mut vtable as *mut PluginVtable);
 
         CURRENT_PLUGIN_IDX.set(usize::MAX);
         plog(&format!("{}: gua_plugin_load 返回 ret={}", file_stem, ret));
@@ -393,7 +396,7 @@ pub unsafe fn load_all(
         if configs
             .get(&name_str)
             .and_then(|c| c.get("enabled"))
-            .map_or(false, |v| v == "false")
+            .is_some_and(|v| v == "false")
         {
             plog(&format!("{} 已禁用", name_str));
             let _ = FreeLibrary(lib);
@@ -461,11 +464,11 @@ pub unsafe fn unload_all() {
 /// - 需在插件已加载后调用
 pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
     let plugins = PLUGINS.r();
-    for i in 0..plugins.len() {
-        if plugins[i].internal_to_user.contains_key(&internal_id) {
-            let user_id = plugins[i].internal_to_user[&internal_id];
+    for (i, plugin) in plugins.iter().enumerate() {
+        if plugin.internal_to_user.contains_key(&internal_id) {
+            let user_id = plugin.internal_to_user[&internal_id];
             plog(&format!("dispatch_hotkey: 插件[{}] user_id={}", i, user_id));
-            let f = plugins[i].vtable.on_hotkey;
+            let f = plugin.vtable.on_hotkey;
             CURRENT_PLUGIN_IDX.set(i);
             let _ = std::panic::catch_unwind(|| {
                 if let Some(f) = f {

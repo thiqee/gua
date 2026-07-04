@@ -27,7 +27,6 @@ pub const FW: f32 = 18.0;
 pub const FUZZY_MATCH_DEFAULT: bool = true;
 pub const PINYIN_SEARCH_DEFAULT: bool = true;
 /// 配置路径改为动态获取: config::config_path()
-
 pub const HOTKEY_ID: i32 = 1;
 
 pub const TRAY_MSG: u32 = WM_APP + 256;
@@ -52,7 +51,7 @@ extern "system" {
 }
 
 #[repr(C)]
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
 pub struct COMPOSITIONFORM {
     pub dwStyle: u32,
     pub ptCurrentPos: POINT,
@@ -225,10 +224,10 @@ fn vk_code(name: &str) -> Option<u32> {
     // A-Z, 0-9
     if bytes.len() == 1 {
         let b = bytes[0];
-        if b'A' <= b && b <= b'Z' {
+        if b.is_ascii_uppercase() {
             return Some(b as u32);
         }
-        if b'0' <= b && b <= b'9' {
+        if b.is_ascii_digit() {
             return Some(b as u32);
         }
     }
@@ -317,7 +316,7 @@ pub fn cfg_pinyin_overrides(entries: &[config::Entry], key: &str) -> HashMap<cha
             if let Some(paren_pos) = part.find('(') {
                 let ch = part[..paren_pos].trim().chars().next();
                 let inner = part[paren_pos + 1..].trim_end_matches(')').trim();
-                for py in inner.split(|c| c == ',' || c == '、') {
+                for py in inner.split([',', '、']) {
                     let py = py.trim().to_lowercase();
                     if !py.is_empty() {
                         if let Some(c) = ch {
@@ -702,7 +701,7 @@ fn pinyin_first_letter_match(inp: &str, key: &str, overrides: &HashMap<char, Vec
             return true;
         };
         let readings = get_readings(c, overrides);
-        let matched = readings.iter().any(|r| r.chars().next() == Some(inp_c));
+        let matched = readings.iter().any(|r| r.starts_with(inp_c));
         if !matched {
             return false;
         }

@@ -96,11 +96,11 @@ pub unsafe extern "system" fn wndproc(
             let sh = status_bar_h(s.dpi, s.status_font_size);
             let win_height = win_h(total, lh, s.eh, s.max_results, sh) as f32;
 
-            let _ = r.d2d_context.BeginDraw();
+            r.d2d_context.BeginDraw();
 
             // 透明清屏（PREMULTIPLIED 下透明部分会被 DComp 合成，实现圆角透出桌面）
             let clear = D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
-            let _ = r.d2d_context.Clear(Some(&clear as *const _));
+            r.d2d_context.Clear(Some(&clear as *const _));
 
             // 窗口背景圆角（覆盖在主题色之上，DComp clip 裁掉角落后自然透明）
             let w = s.width as f32;
@@ -361,7 +361,7 @@ pub unsafe extern "system" fn wndproc(
         }
 
         WM_KEYDOWN => {
-            let ctrl = unsafe { (GetKeyState(0x11) as i16) < 0 };
+            let ctrl = unsafe { GetKeyState(0x11) < 0 };
             match wp.0 as u32 {
                 VK_ESCAPE => { hide_clear(h, s); return LRESULT(0); }
                 VK_RETURN => {
@@ -427,7 +427,7 @@ pub unsafe extern "system" fn wndproc(
                     let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     return LRESULT(0);
                 }
-                0x21 | 0x22 | 0x23 | 0x24 => {
+                0x21..=0x24 => {
                     let n = s.filtered_indices.len();
                     if n == 0 { return LRESULT(0); }
                     match wp.0 as u32 {
@@ -577,11 +577,10 @@ pub unsafe extern "system" fn wndproc(
         }
 
         _ => {
-            if msg != WM_HOTKEY && msg != WM_DESTROY && msg != WM_COMMAND {
-                if plugin::dispatch_wndproc(msg, wp.0 as u64, lp.0 as i64) {
+            if msg != WM_HOTKEY && msg != WM_DESTROY && msg != WM_COMMAND
+                && plugin::dispatch_wndproc(msg, wp.0 as u64, lp.0 as i64) {
                     return LRESULT(0);
                 }
-            }
         }
     }
 

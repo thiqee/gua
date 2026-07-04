@@ -822,8 +822,8 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 }
             }
 
-            let _ = s.d2d_context.BeginDraw();
-            let _ = s.d2d_context.Clear(Some(&D2D1_COLOR_F { r: T.bg_main.0, g: T.bg_main.1, b: T.bg_main.2, a: 1.0 } as *const _));
+            s.d2d_context.BeginDraw();
+            s.d2d_context.Clear(Some(&D2D1_COLOR_F { r: T.bg_main.0, g: T.bg_main.1, b: T.bg_main.2, a: 1.0 } as *const _));
 
             let s_main = main_state();
             let dwf = if !s_main.is_null() { gua_renderer(&*s_main).map(|r| r.dwrite_factory.clone()) } else { None };
@@ -999,14 +999,14 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             return LRESULT(0);
         }
 
-        WM_TIMER if wp.0 as usize == 100 => {
+        WM_TIMER if wp.0 == 100 => {
             if let Some(s) = &mut SETTINGS { s.save_msg.clear(); }
             let _ = KillTimer(Some(h), 100);
             let _ = InvalidateRect(Some(h), None, true);
             return LRESULT(0);
         }
 
-        WM_TIMER if wp.0 as usize == 101 => {
+        WM_TIMER if wp.0 == 101 => {
             if let Some(s) = &mut SETTINGS {
                 let mut need_paint = false;
                 for w in &mut s.widgets { if w.tick() { need_paint = true; } }
@@ -1385,10 +1385,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         0x1B => { clear_focus(s); let _ = InvalidateRect(Some(h), None, true); }
                         0x10 | 0x11 | 0x12 | 0x5B | 0x5C => {}
                         _ => {
-                            let ctrl = (GetAsyncKeyState(0x11) as i16) < 0;
-                            let alt = (GetAsyncKeyState(0x12) as i16) < 0;
-                            let shift = (GetAsyncKeyState(0x10) as i16) < 0;
-                            let win = (GetAsyncKeyState(0x5B) as i16) < 0 || (GetAsyncKeyState(0x5C) as i16) < 0;
+                            let ctrl = GetAsyncKeyState(0x11) < 0;
+                            let alt = GetAsyncKeyState(0x12) < 0;
+                            let shift = GetAsyncKeyState(0x10) < 0;
+                            let win = GetAsyncKeyState(0x5B) < 0 || GetAsyncKeyState(0x5C) < 0;
                             let mods = [ctrl, alt, shift, win];
                             if mods.iter().any(|&m| m) {
                                 let hotkey_str = format_hotkey_string(vk, &mods);
@@ -1460,9 +1460,8 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             let ch = wp.0 as u32;
             if let Some(s) = &mut SETTINGS {
                 if let Some(idx) = s.focused_idx {
-                    if idx < s.widgets.len() {
-                        if s.widgets[idx].on_char(ch) { let _ = InvalidateRect(Some(h), None, true); }
-                    }
+                    if idx < s.widgets.len()
+                        && s.widgets[idx].on_char(ch) { let _ = InvalidateRect(Some(h), None, true); }
                 }
             }
             return LRESULT(0);

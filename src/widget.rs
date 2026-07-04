@@ -343,7 +343,7 @@ impl Widget for ToggleSwitch {
                 unsafe { res.d2d.FillRoundedRectangle(&track_rect as *const _, &b); }
             }
             if let Some(b) = brush(&res.d2d, T.text_secondary, 1.0) {
-                unsafe { let _ = res.d2d.DrawRoundedRectangle(&track_rect as *const _, &b, 1.5, None as Option<&ID2D1StrokeStyle>); }
+                unsafe { res.d2d.DrawRoundedRectangle(&track_rect as *const _, &b, 1.5, None as Option<&ID2D1StrokeStyle>); }
             }
             let thumb_cx = track_l + thumb_d / 2.0 + 2.0;
             let thumb_rect = D2D1_ROUNDED_RECT {
@@ -446,7 +446,7 @@ impl Widget for TextInput {
                     if can_scroll_left && x < self.r.left + edge {
                         sx = (sx - 4.0).max(0.0);
                     } else if can_scroll_right && x > self.r.right - edge {
-                        sx = sx + 4.0;
+                        sx += 4.0;
                     }
                     self.scroll_x.set(sx);
                 }
@@ -474,7 +474,7 @@ impl Widget for TextInput {
         self.scroll_hold.set(false);
         if x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom {
             self.mouse_down = true;
-            if self.sel_start.map_or(true, |s| s == self.sel_end) {
+            if self.sel_start.is_none_or(|s| s == self.sel_end) {
                 self.sel_start = Some(self.cursor_pos);
                 self.sel_end = self.cursor_pos;
             }
@@ -602,7 +602,7 @@ impl Widget for TextInput {
         }
         let bc = if self.hovered && !self.focused { T.border_focused } else { T.border };
         if let Some(b) = brush(&res.d2d, bc, 1.0) {
-            unsafe { let _ = res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            unsafe { res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
 
         let sx = self.scroll_x.get();
@@ -612,8 +612,8 @@ impl Widget for TextInput {
 
         // If center mode text is wider than the box, treat as left-aligned
         let use_center = if self.center {
-            let fits = make_tf(&res.dwrite, 14.0).map(|tf| text_width(&res.dwrite, &tf, &self.text) <= (self.r.right - self.r.left)).unwrap_or(true);
-            fits
+            
+            make_tf(&res.dwrite, 14.0).map(|tf| text_width(&res.dwrite, &tf, &self.text) <= (self.r.right - self.r.left)).unwrap_or(true)
         } else { false };
 
         // ── text drawing (independent of layout) ──
@@ -684,8 +684,8 @@ impl Widget for TextInput {
                     }
                 }
                 // Auto-scroll (only for left-aligned, only when focused)
-                if !use_center && self.focused {
-                    if !self.scroll_hold.get() || self.mouse_down {
+                if !use_center && self.focused
+                    && (!self.scroll_hold.get() || self.mouse_down) {
                         let far = if self.mouse_down { self.sel_end } else { self.cursor_pos };
                         let box_w2 = self.r.right - self.r.left - 16.0;
                         if far > 0 {
@@ -700,7 +700,6 @@ impl Widget for TextInput {
                             self.scroll_x.set(0.0);
                         }
                     }
-                }
             }
         }
         unsafe { res.d2d.PopAxisAlignedClip(); }
@@ -739,7 +738,7 @@ impl Widget for IconButton {
             let bc = if self.hovered { T.accent } else { T.text_secondary };
             let rr = D2D1_ROUNDED_RECT { rect: self.r, radiusX: 4.0, radiusY: 4.0 };
             if let Some(b) = brush(&res.d2d, bc, 1.0) {
-                unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+                unsafe { res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
             }
         }
         let c = if self.hovered { T.text_bright } else { T.tab_text };
@@ -847,7 +846,7 @@ impl Widget for ThreeDotsButton {
             unsafe { res.d2d.FillRoundedRectangle(&rr as *const _, &b); }
         }
         if let Some(b) = brush(&res.d2d, T.bg_widget, 1.0) {
-            unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            unsafe { res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
         for (mi, label) in self.items.iter().enumerate() {
             let item_y = popup_t + 4.0 + mi as f32 * 28.0;
@@ -938,7 +937,7 @@ impl Widget for RefreshButton {
             let bc = if self.hovered { T.accent } else { T.text_secondary };
             let rr = D2D1_ROUNDED_RECT { rect: self.r, radiusX: 4.0, radiusY: 4.0 };
             if let Some(b) = brush(&res.d2d, bc, 1.0) {
-                unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+                unsafe { res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
             }
         }
 
@@ -946,7 +945,7 @@ impl Widget for RefreshButton {
             if self.state == 1 {
                 let dots = [".", "..", "..."];
                 let idx = self.ticks.min(2) as usize;
-                let tc = if (self.ticks % 2) == 0 { T.tab_text } else { T.text_bright };
+                let tc = if self.ticks.is_multiple_of(2) { T.tab_text } else { T.text_bright };
                 if let Some(b) = brush(&res.d2d, tc, 1.0) {
                     draw_text(&res.d2d, dots[idx], &tf, &inner, &b);
                 }
@@ -1164,7 +1163,7 @@ impl Widget for MultilineTextInput {
         let vis_h = self.r.bottom - self.r.top - 4.0;
         if self.text.is_empty() { return true; }
         let content_h = self.content_h.get();
-        let max_s = if content_h > 0.0 { (content_h - vis_h).max(0.0) } else { std::f32::MAX };
+        let max_s = if content_h > 0.0 { (content_h - vis_h).max(0.0) } else { f32::MAX };
         let s = (self.scroll_y.get() - delta).clamp(0.0, max_s);
         self.scroll_y.set(s);
         true
@@ -1262,7 +1261,7 @@ impl Widget for MultilineTextInput {
         }
         let c = if self.focused { T.accent } else if self.hovered { T.border_focused } else { T.border };
         if let Some(b) = brush(&res.d2d, c, 1.0) {
-            unsafe { let _ = res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            unsafe { res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
 
         let box_l = self.r.left + 4.0;
@@ -1301,8 +1300,7 @@ impl Widget for MultilineTextInput {
                         let mut actual = 0u32;
                         let _ = unsafe { layout.HitTestTextRange(lo_u16, len_u16, 0.0, 0.0, Some(metrics.as_mut_slice()), &mut actual) };
                         if let Some(b) = brush(&res.d2d, T.accent, 0.30) {
-                            for i in 0..actual as usize {
-                                let m = &metrics[i];
+                            for m in metrics.iter().take(actual as usize) {
                                 let sel_l = box_l + m.left;
                                 let sel_t = box_t - sy + m.top;
                                 let sel_r = sel_l + m.width;
@@ -1531,7 +1529,7 @@ impl Widget for Dropdown {
         }
         let c = if self.focused { T.accent } else if self.hovered { T.border_focused } else { T.border };
         if let Some(b) = brush(&res.d2d, c, 1.0) {
-            unsafe { let _ = res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            unsafe { res.d2d.DrawRoundedRectangle(&inp_rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
 
         let display = if self.options.is_empty() { self.options.get(self.selected).map(|s| s.as_str()).unwrap_or("") } else { self.options[self.selected].as_str() };
@@ -1570,7 +1568,7 @@ impl Widget for Dropdown {
             unsafe { res.d2d.FillRoundedRectangle(&rr as *const _, &b); }
         }
         if let Some(b) = brush(&res.d2d, T.bg_input, 1.0) {
-            unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            unsafe { res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
 
         let vis_count = self.options.len().min(self.popup_max_visible);
@@ -1645,7 +1643,7 @@ impl Widget for KeyBindingInput {
         let lc = if self.focused { T.accent } else if self.hovered { T.border_focused } else { T.border };
         if let Some(b) = brush(&res.d2d, lc, 1.0) {
             let rr = D2D1_ROUNDED_RECT { rect: self.r, radiusX: 6.0, radiusY: 6.0 };
-            unsafe { let _ = res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
+            unsafe { res.d2d.DrawRoundedRectangle(&rr as *const _, &b, 1.0, None as Option<&ID2D1StrokeStyle>); }
         }
 
         let display = if self.focused { "按下快捷键...".to_string() } else { self.text.clone() };
