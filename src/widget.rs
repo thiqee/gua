@@ -1727,6 +1727,7 @@ extern "system" {
     fn GlobalLock(hMem: HANDLE) -> *mut std::ffi::c_void;
     fn GlobalUnlock(hMem: HANDLE) -> BOOL;
     fn GlobalFree(hMem: HANDLE) -> HANDLE;
+    fn GlobalSize(hMem: HANDLE) -> usize;
 }
 
 const CF_UNICODETEXT: u32 = 13;
@@ -1757,8 +1758,9 @@ pub fn clipboard_paste() -> Option<String> {
         if h == HANDLE::default() { let _ = CloseClipboard(); return None; }
         let lock = GlobalLock(h);
         if lock.is_null() { let _ = CloseClipboard(); return None; }
+        let max_u16 = GlobalSize(h) / 2;
         let mut len = 0;
-        while *((lock as *const u16).add(len)) != 0 { len += 1; }
+        while len < max_u16 && *((lock as *const u16).add(len)) != 0 { len += 1; }
         let slice = std::slice::from_raw_parts(lock as *const u16, len);
         let s = String::from_utf16_lossy(slice);
         let _ = GlobalUnlock(h);
