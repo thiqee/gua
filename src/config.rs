@@ -45,9 +45,12 @@ pub fn default_entries() -> Vec<Entry> {
     ]
 }
 
+#[allow(unused_variables)]
 fn panic_log(msg: &str) {
-    let path = config_dir().join("panic.log");
-    let _ = fs::write(&path, msg);
+    #[cfg(debug_assertions)] {
+        let path = config_dir().join("panic.log");
+        let _ = fs::write(&path, msg);
+    }
 }
 
 /// 创建 config / fonts / plugins 三个目录

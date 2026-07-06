@@ -5,17 +5,22 @@ use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::fs;
+#[cfg(debug_assertions)]
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::config;
 use crate::state::to_w;
 
-fn plog(msg: &str) {
-    let path = config::config_dir().join("panic.log");
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "plugin: {msg}");
+#[allow(unused_variables)]
+pub fn plog(msg: &str) {
+    #[cfg(debug_assertions)] {
+        let path = config::config_dir().join("panic.log");
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "plugin: {msg}");
+        }
     }
 }
 
@@ -70,8 +75,6 @@ pub struct GuaApi {
 #[repr(C)]
 pub struct PluginVtable {
     pub vtable_size: u32,
-    pub name: *const i8,
-    pub version: *const i8,
     pub init: Option<unsafe extern "C" fn() -> i32>,
     pub on_hotkey: Option<unsafe extern "C" fn(user_id: i32)>,
     pub on_tick: Option<unsafe extern "C" fn(user_id: i32)>,
@@ -82,6 +85,34 @@ pub struct PluginVtable {
 }
 
 type GuaPluginLoadFn = unsafe extern "C" fn(api: *const GuaApi, vtable: *mut PluginVtable) -> i32;
+
+// ── 插件元信息（从 plugin.json 读取） ──────────────────────────
+
+#[derive(Clone, Debug)]
+pub struct PluginMeta {
+    pub name: String,
+    pub binary: String,
+    pub version: String,
+    pub description: String,
+    pub author: String,
+    #[allow(dead_code)]
+    pub homepage: String,
+    pub dir: PathBuf,
+}
+
+static mut PLUGIN_METAS: ST<Vec<PluginMeta>> = ST::new(Vec::new());
+
+pub fn plugin_metas() -> &'static Vec<PluginMeta> {
+    unsafe { PLUGIN_METAS.r() }
+}
+
+/// 检查某个插件是否已加载（已加载表示已启用）
+#[allow(dead_code)]
+pub fn is_loaded(name: &str) -> bool {
+    unsafe {
+        PLUGINS.r().iter().any(|p| p.name == name)
+    }
+}
 
 // ── 内部状态 ──────────────────────────────────────────────────
 
@@ -283,6 +314,51 @@ unsafe extern "C" fn log_impl(level: i32, msg: *const i8) {
         ));
 }
 
+// ── plugin.json 解析 ───────────────────────────────────────────
+
+fn extract_json_str(content: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"\\s*:\\s*\"", key);
+    let start = content.find(&pattern)?;
+    let start = start + pattern.len();
+    let end = content[start..].find('"')?;
+    let raw = &content[start..start + end];
+    Some(raw.replace("\\\"", "\"").replace("\\\\", "\\"))
+}
+
+fn parse_plugin_json(content: &str, dir: &Path) -> Option<PluginMeta> {
+    let name = extract_json_str(content, "name")?;
+    if name.is_empty() { return None; }
+    let binary = extract_json_str(content, "binary").unwrap_or_else(|| format!("{}.dll", name));
+    let version = extract_json_str(content, "version").unwrap_or_default();
+    let description = extract_json_str(content, "description").unwrap_or_default();
+    let author = extract_json_str(content, "author").unwrap_or_default();
+    let homepage = extract_json_str(content, "homepage").unwrap_or_default();
+    Some(PluginMeta { name, binary, version, description, author, homepage, dir: dir.to_path_buf() })
+}
+
+fn scan_plugin_metas(plugin_dir: &Path) -> Vec<PluginMeta> {
+    let mut metas = Vec::new();
+    let entries: Vec<_> = match fs::read_dir(plugin_dir) {
+        Ok(iter) => iter.flatten().collect(),
+        Err(_) => return metas,
+    };
+    for entry in &entries {
+        let dir_path = entry.path();
+        if !dir_path.is_dir() { continue; }
+        let json_path = dir_path.join("plugin.json");
+        if !json_path.is_file() { continue; }
+        let content = match fs::read_to_string(&json_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if let Some(meta) = parse_plugin_json(&content, &dir_path) {
+            plog(&format!("发现插件: {}", meta.name));
+            metas.push(meta);
+        }
+    }
+    metas
+}
+
 // ── 公共 API ──────────────────────────────────────────────────
 
 /// 加载所有插件（在窗口创建后、消息循环前调用）
@@ -299,62 +375,56 @@ pub unsafe fn load_all(
     *PLUGIN_CONFIGS.w() = Some(plugin_configs.clone());
     *TIMER_MAP.w() = Some(HashMap::new());
     *PLUGINS.w() = Vec::new();
+    *PLUGIN_METAS.w() = Vec::new();
     GUA_API.hwnd = hwnd.0 as u64;
 
     let plugin_dir = config::config_dir().join("plugins");
-    if !plugin_dir.is_dir() {
-        return;
-    }
-
-    let mut entries: Vec<_> = match std::fs::read_dir(&plugin_dir) {
-        Ok(iter) => iter.flatten().collect(),
-        Err(_) => return,
-    };
-    entries.sort_by_key(|e| e.file_name());
+    if !plugin_dir.is_dir() { return; }
 
     let configs = PLUGIN_CONFIGS.r();
     let configs = configs.as_ref().unwrap();
 
-    for entry in &entries {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("dll") {
-            continue;
-        }
-        let file_stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        if file_stem.is_empty() {
+    // 1. 扫描所有 plugin.json
+    let metas = scan_plugin_metas(&plugin_dir);
+    *PLUGIN_METAS.w() = metas.clone();
+
+    // 2. 逐个加载已启用的插件
+    for meta in &metas {
+        let name = &meta.name;
+        let enabled = configs
+            .get(name.as_str())
+            .and_then(|c| c.get("enabled"))
+            .is_none_or(|v| v != "false");
+
+        if !enabled {
+            plog(&format!("{}: 已禁用，跳过", name));
             continue;
         }
 
-        plog(&format!("发现DLL: {}", file_stem));
-        let full_path = to_w(&path.to_string_lossy());
-        let lib = LoadLibraryW(full_path.as_ptr());
-        if lib.is_null() {
-            plog(&format!("{}: LoadLibraryW 失败", file_stem));
+        let dll_path = meta.dir.join(&meta.binary);
+        if !dll_path.is_file() {
+            plog(&format!("{}: 未找到 {}", name, meta.binary));
             continue;
         }
-        plog(&format!("{}: LoadLibraryW 成功", file_stem));
+
+        let full_path = to_w(&dll_path.to_string_lossy());
+        let lib = LoadLibraryW(full_path.as_ptr());
+        if lib.is_null() {
+            plog(&format!("{}: LoadLibraryW 失败", name));
+            continue;
+        }
 
         let load_fn_name = b"gua_plugin_load\0";
         let proc = GetProcAddress(lib, load_fn_name.as_ptr());
         if proc.is_none() {
-            plog(&format!("{}: 缺少 gua_plugin_load 导出", file_stem));
+            plog(&format!("{}: 缺少 gua_plugin_load 导出", name));
             let _ = FreeLibrary(lib);
             continue;
         }
-        plog(&format!("{}: 找到 gua_plugin_load", file_stem));
         let load_fn: GuaPluginLoadFn = std::mem::transmute(proc.unwrap());
-
-        // GuaApi 指针（静态分配，零泄漏）
-        let gua_api = &GUA_API as *const GuaApi;
 
         let mut vtable = PluginVtable {
             vtable_size: 0,
-            name: ptr::null(),
-            version: ptr::null(),
             init: None,
             on_hotkey: None,
             on_tick: None,
@@ -365,79 +435,57 @@ pub unsafe fn load_all(
 
         let idx = PLUGINS.r().len();
         CURRENT_PLUGIN_IDX.set(idx);
-        plog(&format!("{}: 调用 gua_plugin_load...", file_stem));
 
-        let ret = load_fn(gua_api, &mut vtable as *mut PluginVtable);
+        let load_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_fn(&GUA_API as *const GuaApi, &mut vtable as *mut PluginVtable)
+        }));
 
         CURRENT_PLUGIN_IDX.set(usize::MAX);
-        plog(&format!("{}: gua_plugin_load 返回 ret={}", file_stem, ret));
 
-        if ret != 0 || vtable.name.is_null() {
-            plog(&format!("{}: 初始化失败 (ret={})", file_stem, ret));
-            let _ = FreeLibrary(lib);
-            continue;
-        }
-
-        let name_str = match CStr::from_ptr(vtable.name).to_str() {
-            Ok(s) => s.to_string(),
+        let ret = match load_result {
+            Ok(r) => r,
             Err(_) => {
-                plog(&format!("{}: 插件名不是合法 UTF-8，跳过", file_stem));
+                plog(&format!("{}: gua_plugin_load 发生 panic", name));
                 let _ = FreeLibrary(lib);
-                CURRENT_PLUGIN_IDX.set(usize::MAX);
                 continue;
             }
         };
-        plog(&format!("{}: 名称=\"{}\" has_init={}", file_stem, name_str, vtable.init.is_some()));
-        if vtable.vtable_size > std::mem::size_of::<PluginVtable>() as u32 {
-            vtable.vtable_size = std::mem::size_of::<PluginVtable>() as u32;
+
+        if ret != 0 {
+            plog(&format!("{}: 加载失败 (ret={})", name, ret));
+            let _ = FreeLibrary(lib);
+            continue;
         }
 
-        // 用 vtable 中的 name 检查 enabled 开关（config section 名应与插件声明的 name 一致）
-        if configs
-            .get(&name_str)
-            .and_then(|c| c.get("enabled"))
-            .is_some_and(|v| v == "false")
-        {
-            plog(&format!("{} 已禁用", name_str));
-            let _ = FreeLibrary(lib);
-            CURRENT_PLUGIN_IDX.set(usize::MAX);
-            continue;
+        if vtable.vtable_size > std::mem::size_of::<PluginVtable>() as u32 {
+            vtable.vtable_size = std::mem::size_of::<PluginVtable>() as u32;
         }
 
         PLUGINS.w().push(LoadedPlugin {
             lib,
             vtable,
-            name: name_str.clone(),
+            name: name.clone(),
             user_to_internal: HashMap::new(),
             internal_to_user: HashMap::new(),
         });
 
-        CURRENT_PLUGIN_IDX.set(usize::MAX);
-
         // 调用 init
         CURRENT_PLUGIN_IDX.set(idx);
-        plog(&format!("{}: 调用 init...", name_str));
         let init_result = std::panic::catch_unwind(|| {
             let init_fn = PLUGINS.r()[idx].vtable.init;
-            if let Some(f) = init_fn {
-                f()
-            } else {
-                0
-            }
+            if let Some(f) = init_fn { f() } else { 0 }
         });
         CURRENT_PLUGIN_IDX.set(usize::MAX);
 
         match init_result {
-            Ok(0) => { plog(&format!("{}: init 成功", name_str)); }
+            Ok(0) => plog(&format!("{}: init 成功", name)),
             Ok(r) => {
-                plog(&format!("{}: init 返回非零 {}", name_str, r));
+                plog(&format!("{}: init 返回非零 {}", name, r));
                 cleanup_plugin(idx);
-                continue;
             }
             Err(_) => {
-                plog(&format!("{}: init 发生 panic", name_str));
+                plog(&format!("{}: init 发生 panic", name));
                 cleanup_plugin(idx);
-                continue;
             }
         }
     }

@@ -9,6 +9,7 @@ use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::Shell::ShellExecuteW;
@@ -16,6 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config;
 use crate::plugin;
+use crate::plugin::plog;
 use crate::state::*;
 use crate::widget::*;
 use crate::window;
@@ -36,12 +38,6 @@ extern "system" {
     fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
 }
 
-#[link(name = "gdi32")]
-extern "system" {
-    fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> HRGN;
-    fn SetWindowRgn(h: HWND, hRgn: HRGN, bRedraw: BOOL) -> i32;
-}
-
 const S_W: i32 = 780;
 const S_H: i32 = 640;
 const TITLE_H: f32 = 30.0;
@@ -52,7 +48,7 @@ const CONTENT_PAD: f32 = 24.0;
 const ROW_H: f32 = 28.0;
 const ROW_GAP: f32 = 38.0;
 const HALF_PAD: f32 = 14.0;
-const CORNER_R: f32 = 6.0;
+const CORNER_R: f32 = 12.0;
 
 #[allow(dead_code)]
 pub struct SettingsWin {
@@ -60,6 +56,8 @@ pub struct SettingsWin {
     swap_chain: IDXGISwapChain1,
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
+    dcomp_visual: Option<IDCompositionVisual>,
+    dcomp_target: Option<IDCompositionTarget>,
     widgets: Vec<Box<dyn Widget>>,
     cards: Vec<D2D_RECT_F>,
     cat: usize,
@@ -76,6 +74,7 @@ pub struct SettingsWin {
     // 识别码 tab state
     codes_search: String,
     codes_version: usize,
+    plugins_version: usize,
     cat_expanded: Vec<bool>,
     scroll_dragging: bool,
     scroll_drag_start_y: f32,
@@ -625,6 +624,96 @@ unsafe fn build_codes_tab(
     w
 }
 
+unsafe fn build_plugins_tab(
+    cards: &mut Vec<D2D_RECT_F>,
+    content_h: &mut f32,
+    settings: &[config::Entry],
+) -> Vec<Box<dyn Widget>> {
+    cards.clear();
+    let mut w: Vec<Box<dyn Widget>> = Vec::new();
+    let cx = CONTENT_L + CONTENT_PAD;
+    let cw = (S_W as f32) - CONTENT_L - CONTENT_PAD - CONTENT_PAD;
+    let card_l = cx;
+    let card_r = cx + cw;
+    let inner_l = cx + HALF_PAD;
+    let inner_w = cw - 28.0;
+    let mut y = TITLE_H + CONTENT_PAD;
+
+    // 公告提示
+    let mut notice = Notice::new("每个插件有独立的配置文件夹，请点击\"打开文件夹\"前往配置插件的具体功能。");
+    notice.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w, bottom: y + 44.0 });
+    w.push(Box::new(notice));
+    y += 48.0;
+
+    // 打开插件根目录按钮
+    let mut root_btn = IconButton::new("📂 打开插件根目录");
+    root_btn.bordered = true;
+    root_btn.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 150.0, bottom: y + ROW_H + 4.0 });
+    root_btn.cmd = WidgetCmd::PluginRootOpen;
+    w.push(Box::new(root_btn));
+    y += 40.0;
+
+    // 插件卡片
+    let metas = plugin::plugin_metas().clone();
+    if metas.is_empty() {
+        let mut lbl = Label::new("尚未发现插件，请将插件放入 plugins/ 目录。");
+        lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w, bottom: y + 24.0 });
+        w.push(Box::new(lbl));
+        y += 30.0;
+    }
+
+    for (mi, meta) in metas.iter().enumerate() {
+        let ct = y;
+
+        // 卡片标题行：名称 + 版本 + 启用开关
+        let header_text = format!("{}  v{}", meta.name, meta.version);
+        let mut name_lbl = Label::new(&header_text);
+        name_lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y + 2.0, right: inner_l + inner_w - 56.0, bottom: y + ROW_H });
+        w.push(Box::new(name_lbl));
+
+        let enabled = settings.iter()
+            .find(|e| e.key == "_enabled" && e.category.as_deref() == Some(&format!("plugin.{}", meta.name)))
+            .is_none_or(|e| {
+                e.value == "true" || e.value == "1"
+            });
+        let mut sw = ToggleSwitch::new(enabled);
+        sw.cmd = WidgetCmd::PluginToggle(mi);
+        sw.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 48.0, top: y, right: inner_l + inner_w, bottom: y + ROW_H });
+        w.push(Box::new(sw));
+        y += 30.0;
+
+        // 描述
+        if !meta.description.is_empty() {
+            let mut desc_lbl = Label::new(&meta.description);
+            desc_lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w - 56.0, bottom: y + ROW_H });
+            w.push(Box::new(desc_lbl));
+            y += 30.0;
+        }
+
+        // 作者 + 打开文件夹按钮
+        if !meta.author.is_empty() {
+            let author_text = format!("作者: {}", meta.author);
+            let mut author_lbl = Label::new(&author_text);
+            author_lbl.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + 200.0, bottom: y + ROW_H });
+            w.push(Box::new(author_lbl));
+        }
+
+        let mut folder_btn = IconButton::new("📂 打开");
+        folder_btn.bordered = true;
+        folder_btn.cmd = WidgetCmd::PluginOpen(mi);
+        folder_btn.set_bounds(D2D_RECT_F { left: inner_l + inner_w - 80.0, top: y, right: inner_l + inner_w, bottom: y + ROW_H });
+        w.push(Box::new(folder_btn));
+        y += 36.0;
+
+        // 卡片背景
+        cards.push(D2D_RECT_F { left: card_l, top: ct, right: card_r, bottom: y });
+        y += 12.0;
+    }
+
+    *content_h = y;
+    w
+}
+
 pub unsafe fn open_settings(_h: HWND, r: &GuaRenderer) {
     if let Some(ref s) = SETTINGS {
         let _ = ShowWindow(s.hwnd, SW_SHOW);
@@ -632,27 +721,32 @@ pub unsafe fn open_settings(_h: HWND, r: &GuaRenderer) {
         return;
     }
 
-    let inst = GetModuleHandleW(None).unwrap();
+    let inst = match GetModuleHandleW(None) {
+        Ok(h) => h,
+        Err(e) => { plog(&format!("open_settings: GetModuleHandleW 失败 {e:?}")); return; }
+    };
     let cn = to_w("Gua_Settings");
     let wc = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(settings_proc),
         hInstance: inst.into(),
-        hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+        hCursor: match LoadCursorW(None, IDC_ARROW) {
+            Ok(c) => c,
+            Err(e) => { plog(&format!("open_settings: LoadCursorW 失败 {e:?}")); return; }
+        },
         hbrBackground: HBRUSH(ptr::null_mut()),
         lpszClassName: PCWSTR(cn.as_ptr()),
         ..Default::default()
     };
     RegisterClassW(&wc);
 
-    let hwnd_s = CreateWindowExW(
-        WINDOW_EX_STYLE::default(), PCWSTR(cn.as_ptr()), w!("Gua 设置"),
-        WS_POPUP,
-        0, 0, S_W, S_H, None, None, Some(inst.into()), None,
-    ).unwrap();
-
-    let hrgn = CreateRoundRectRgn(0, 0, S_W + 1, S_H + 1, 12, 12);
-    if !hrgn.0.is_null() { SetWindowRgn(hwnd_s, hrgn, true.into()); }
+    let hwnd_s = match CreateWindowExW(
+        WS_EX_NOREDIRECTIONBITMAP, PCWSTR(cn.as_ptr()), w!("Gua 设置"),
+        WS_POPUP, 0, 0, S_W, S_H, None, None, Some(inst.into()), None,
+    ) {
+        Ok(h) => h,
+        Err(e) => { plog(&format!("open_settings: CreateWindowExW 失败 {e:?}")); return; }
+    };
 
     let mon = MonitorFromWindow(hwnd_s, MONITOR_DEFAULTTONEAREST);
     let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
@@ -662,38 +756,74 @@ pub unsafe fn open_settings(_h: HWND, r: &GuaRenderer) {
         let _ = SetWindowPos(hwnd_s, Some(HWND_TOP), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
 
-    let dxgi_device: IDXGIDevice = r.d3d_device.cast().unwrap();
-    let adapter = dxgi_device.GetAdapter().unwrap();
-    let factory: IDXGIFactory2 = adapter.GetParent().unwrap();
+    let dxgi_device: IDXGIDevice = match r.d3d_device.cast() {
+        Ok(d) => d,
+        Err(e) => { plog(&format!("open_settings: d3d_device.cast() 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
+    let adapter = match dxgi_device.GetAdapter() {
+        Ok(a) => a,
+        Err(e) => { plog(&format!("open_settings: GetAdapter 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
+    let factory: IDXGIFactory2 = match adapter.GetParent() {
+        Ok(f) => f,
+        Err(e) => { plog(&format!("open_settings: GetParent 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
 
     let desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: S_W as u32, Height: S_H as u32, Format: DXGI_FORMAT_B8G8R8A8_UNORM,
         Stereo: false.into(), SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 2,
-        Scaling: DXGI_SCALING_NONE, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-        AlphaMode: DXGI_ALPHA_MODE_IGNORE, Flags: 0u32,
+        Scaling: DXGI_SCALING_STRETCH, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED, Flags: 0u32,
     };
-    let sc = factory.CreateSwapChainForHwnd(&r.d3d_device, hwnd_s, &desc, None, None).unwrap();
+    let sc = match factory.CreateSwapChainForComposition(&r.d3d_device, &desc, None) {
+        Ok(s) => s,
+        Err(e) => { plog(&format!("open_settings: CreateSwapChainForComposition 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
 
-    let d2d = r.d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE).unwrap();
-    let back: IDXGISurface = sc.GetBuffer(0).unwrap();
+    let d2d = match r.d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE) {
+        Ok(c) => c,
+        Err(e) => { plog(&format!("open_settings: CreateDeviceContext 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
+    let back: IDXGISurface = match sc.GetBuffer(0) {
+        Ok(b) => b,
+        Err(e) => { plog(&format!("open_settings: GetBuffer 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
     let props = D2D1_BITMAP_PROPERTIES1 {
-        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
+        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
         dpiX: 96.0, dpiY: 96.0,
         bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
         colorContext: std::mem::ManuallyDrop::new(None),
     };
-    let target = d2d.CreateBitmapFromDxgiSurface(&back, Some(&props)).unwrap();
+    let target = match d2d.CreateBitmapFromDxgiSurface(&back, Some(&props)) {
+        Ok(t) => t,
+        Err(e) => { plog(&format!("open_settings: CreateBitmapFromDxgiSurface 失败 {e:?}")); let _ = DestroyWindow(hwnd_s); return; }
+    };
     d2d.SetTarget(&target);
+
+    // DComp 绑定
+    let mut dcomp_visual: Option<IDCompositionVisual> = None;
+    let mut dcomp_target: Option<IDCompositionTarget> = None;
+    if let Some(ref dcomp) = r.dcomp_device {
+        if let Ok(v) = dcomp.CreateVisual() {
+            let _ = v.SetContent(&sc);
+            if let Ok(t) = dcomp.CreateTargetForHwnd(hwnd_s, true) {
+                let _ = t.SetRoot(&v);
+                dcomp_target = Some(t);
+            }
+            let _ = dcomp.Commit();
+            dcomp_visual = Some(v);
+        }
+    }
 
     let win = SettingsWin {
         hwnd: hwnd_s, swap_chain: sc, d2d_context: d2d,
-        target: Some(target), widgets: Vec::new(), cards: Vec::new(),
+        target: Some(target), dcomp_visual, dcomp_target, widgets: Vec::new(), cards: Vec::new(),
         cat: 0, sel_cat: 99, scroll_y: 0.0, content_h: 0.0,
         focused_idx: None, capturing_hotkey: false,
         mod_held: [false; 4],
         close_hovered: false, save_hovered: false, cat_add_hovered: false, settings: config::load_settings(),
-        codes_search: String::new(), codes_version: 0,
+        codes_search: String::new(), codes_version: 0, plugins_version: 0,
         cat_expanded: Vec::new(),
         scroll_dragging: false, scroll_drag_start_y: 0.0,
         composing: String::new(),
@@ -797,6 +927,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if cur_search != s.codes_search { need_rebuild = true; s.codes_search = cur_search; }
                 if s.codes_version > 0 { need_rebuild = true; s.codes_version = 0; }
             }
+            if !need_rebuild && s.cat == 3 && s.plugins_version > 0 {
+                need_rebuild = true;
+                s.plugins_version = 0;
+            }
             if need_rebuild {
                 sync_settings_entries(s);
                 if s.cat == 2 { sync_codes_entries(s); }
@@ -810,6 +944,9 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 if s.cat == 2 {
                     let widgets = build_codes_tab(&mut s.cards, &mut s.content_h, &s.codes_search, &mut s.cat_expanded, &s.cat_renaming, &s.cat_renaming_old);
                     s.widgets = widgets;
+                } else if s.cat == 3 {
+                    let widgets = build_plugins_tab(&mut s.cards, &mut s.content_h, &s.settings);
+                    s.widgets = widgets;
                 } else {
                     s.widgets = build_widgets(s.cat, &mut s.cards, &mut s.content_h, &s.settings);
                 }
@@ -822,16 +959,20 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
 
             s.d2d_context.BeginDraw();
-            s.d2d_context.Clear(Some(&D2D1_COLOR_F { r: T.bg_main.0, g: T.bg_main.1, b: T.bg_main.2, a: 1.0 } as *const _));
+            let clear = D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
+            s.d2d_context.Clear(Some(&clear as *const _));
+            if let Some(b) = brush(&s.d2d_context, T.bg_main, 1.0) {
+                s.d2d_context.FillRoundedRectangle(&D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F { left: 0.0, top: 0.0, right: S_W as f32, bottom: S_H as f32 },
+                    radiusX: CORNER_R, radiusY: CORNER_R,
+                } as *const _, &b);
+            }
 
             let s_main = main_state();
             let dwf = if !s_main.is_null() { gua_renderer(&*s_main).map(|r| r.dwrite_factory.clone()) } else { None };
             let ar: Color = if !s_main.is_null() { let s = &*s_main; let c = color_to_d2d(s.accent_color, 1.0); (c.r, c.g, c.b) } else { T.accent };
 
             // ── 标题栏 ──
-            if let Some(b) = brush(&s.d2d_context, T.bg_sidebar, 1.0) {
-                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: 0.0, right: S_W as f32, bottom: TITLE_H } as *const _, &b);
-            }
             if let Some(b) = brush(&s.d2d_context, T.bg_title, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: TITLE_H - 1.0, right: S_W as f32, bottom: TITLE_H } as *const _, &b);
             }
@@ -845,13 +986,10 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
 
             // ── 侧边栏 ──
-            if let Some(b) = brush(&s.d2d_context, T.bg_sidebar, 1.0) {
-                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: TITLE_H, right: SIDEBAR_W, bottom: S_H as f32 - BOTTOM_H } as *const _, &b);
-            }
             if let Some(b) = brush(&s.d2d_context, T.bg_separator, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: SIDEBAR_W - 1.0, top: TITLE_H, right: SIDEBAR_W, bottom: S_H as f32 - BOTTOM_H } as *const _, &b);
             }
-            let names = ["通用", "外观", "识别码"];
+            let names = ["通用", "外观", "识别码", "插件"];
             for (i, name) in names.iter().enumerate() {
                 let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
                 let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + ROW_GAP };
@@ -919,9 +1057,6 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
 
             // ── 底部操作栏 ──
-            if let Some(b) = brush(&s.d2d_context, T.bg_sidebar, 1.0) {
-                s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: S_H as f32 - BOTTOM_H, right: S_W as f32, bottom: S_H as f32 } as *const _, &b);
-            }
             if let Some(b) = brush(&s.d2d_context, T.bg_title, 1.0) {
                 s.d2d_context.FillRectangle(&D2D_RECT_F { left: 0.0, top: S_H as f32 - BOTTOM_H, right: S_W as f32, bottom: S_H as f32 - BOTTOM_H + 1.0 } as *const _, &b);
             }
@@ -1081,7 +1216,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                 }
 
                 if x < SIDEBAR_W {
-                    for i in 0..3 {
+                    for i in 0..4 {
                         let btn_top = TITLE_H + 12.0 + i as f32 * 46.0;
                         let btn = D2D_RECT_F { left: 12.0, top: btn_top, right: SIDEBAR_W - 12.0, bottom: btn_top + ROW_GAP };
                         if x >= btn.left && x <= btn.right && y >= btn.top && y <= btn.bottom {
@@ -1250,6 +1385,35 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                 }
                                 WidgetCmd::FontOpen => {
                                     let dir = config::config_dir().join("fonts");
+                                    let p = to_w(&dir.to_string_lossy());
+                                    let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
+                                }
+                                WidgetCmd::PluginToggle(idx) => {
+                                    let metas = plugin::plugin_metas();
+                                    if idx < metas.len() {
+                                        let cat_name = format!("plugin.{}", metas[idx].name);
+                                        let enabled = s.widgets[handled_idx].text() == "true";
+                                        if let Some(e) = s.settings.iter_mut().find(|e| e.key == "_enabled" && e.category.as_deref() == Some(&cat_name)) {
+                                            e.value = if enabled { "true".to_string() } else { "false".to_string() };
+                                        } else {
+                                            s.settings.push(config::Entry { key: "_enabled".into(), value: if enabled { "true".to_string() } else { "false".to_string() }, category: Some(cat_name), description: None });
+                                        }
+                                        let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+                                        let plugin_cfgs = config::build_plugin_configs(&s.settings);
+                                        plugin::load_all(main_hwnd, &plugin_cfgs);
+                                        s.plugins_version += 1;
+                                        let _ = InvalidateRect(Some(h), None, true);
+                                    }
+                                }
+                                WidgetCmd::PluginOpen(idx) => {
+                                    let metas = plugin::plugin_metas();
+                                    if idx < metas.len() {
+                                        let p = to_w(&metas[idx].dir.to_string_lossy());
+                                        let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
+                                    }
+                                }
+                                WidgetCmd::PluginRootOpen => {
+                                    let dir = config::config_dir().join("plugins");
                                     let p = to_w(&dir.to_string_lossy());
                                     let _ = ShellExecuteW(Some(h), w!("open"), pcwstr(&p), PCWSTR(ptr::null()), PCWSTR(ptr::null()), SW_SHOWNORMAL);
                                 }

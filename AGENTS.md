@@ -87,3 +87,14 @@ After /clear or /compact: knowledge base and session stats preserved. Use `ctx p
 
 **仅当用户明确说出"提交"、"commit"、"push"时才执行 git commit/push。**
 未经许可绝不进行任何 git 提交操作。工作完成后只列出改动的文件清单，等待用户指令。若用户要求"记住"某条规则，必须记录到本文件。
+
+## 项目强制规则
+
+### 禁止使用数字 vtable 索引 — BLOCKED
+`.add(N)` 访问 COM vtable slot 被禁止。所有 COM 方法必须使用 crate 导出的公开 API。
+
+### 禁止使用 GDI — BLOCKED
+`SetWindowRgn`、`CreateRoundRectRgn`、`BeginPath`/`EndPath` 等 GDI API 被禁止。圆角只能用 D2D/DComp 实现（`IDCompositionRectangleClip` 或 `FillRoundedRectangle`）。
+
+### 禁止使用 unwrap() — BLOCKED
+所有可能失败的调用必须用 match 处理错误，不允许 unwrap/expect。

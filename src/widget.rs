@@ -26,6 +26,9 @@ pub enum WidgetCmd {
     CatDelete(usize),
     FontRefresh,
     FontOpen,
+    PluginToggle(usize),
+    PluginOpen(usize),
+    PluginRootOpen,
 }
 
 pub trait Widget {
@@ -289,15 +292,17 @@ pub struct ToggleSwitch {
     pub checked: bool,
     hovered: bool,
     pub settings_key: Option<String>,
+    pub cmd: WidgetCmd,
 }
 
 impl ToggleSwitch {
     pub fn new(checked: bool) -> Self {
-        Self { r: D2D_RECT_F::default(), checked, hovered: false, settings_key: None }
+        Self { r: D2D_RECT_F::default(), checked, hovered: false, settings_key: None, cmd: WidgetCmd::None }
     }
 }
 
 impl Widget for ToggleSwitch {
+    fn cmd(&self) -> WidgetCmd { self.cmd }
     fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
     fn bounds(&self) -> D2D_RECT_F { self.r }
     fn on_mouse_move(&mut self, x: f32, y: f32) {
@@ -1367,6 +1372,42 @@ impl Widget for MultilineTextInput {
                     if let Some(b) = brush(&res.d2d, T.text_secondary, 1.0) {
                         unsafe { res.d2d.FillRectangle(&D2D_RECT_F { left: sb_l, top: thumb_t, right: sb_r, bottom: thumb_t + thumb_h } as *const _, &b); }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── Notice ──
+
+pub struct Notice {
+    r: D2D_RECT_F,
+    text: String,
+}
+
+impl Notice {
+    pub fn new(text: &str) -> Self {
+        Self { r: D2D_RECT_F::default(), text: text.to_string() }
+    }
+}
+
+impl Widget for Notice {
+    fn set_bounds(&mut self, r: D2D_RECT_F) { self.r = r; }
+    fn bounds(&self) -> D2D_RECT_F { self.r }
+    fn on_mouse_move(&mut self, _x: f32, _y: f32) {}
+    fn on_mouse_leave(&mut self) {}
+    fn set_focused(&mut self, _val: bool) {}
+
+    fn draw(&self, res: &D2DRes) {
+        let box_l = self.r.left + 4.0;
+        let box_t = self.r.top + 2.0;
+        let box_w = self.r.right - self.r.left - 12.0;
+        if let Some(tf) = make_tf(&res.dwrite, 14.0) {
+            unsafe { let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER); }
+            let ws: Vec<u16> = self.text.encode_utf16().collect();
+            if let Ok(layout) = unsafe { res.dwrite.CreateTextLayout(&ws, &tf, box_w.max(1.0), 10000.0) } {
+                    if let Some(b) = brush(&res.d2d, T.tab_text, 1.0) {
+                    unsafe { res.d2d.DrawTextLayout(Vector2 { X: box_l, Y: box_t }, &layout, &b, D2D1_DRAW_TEXT_OPTIONS(0)); }
                 }
             }
         }

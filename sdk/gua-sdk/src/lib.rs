@@ -29,8 +29,6 @@ pub struct GuaApi {
 #[repr(C)]
 pub struct PluginVtable {
     pub vtable_size: u32,
-    pub name: *const i8,
-    pub version: *const i8,
     pub init: Option<unsafe extern "C" fn() -> i32>,
     pub on_hotkey: Option<unsafe extern "C" fn(user_id: i32)>,
     pub on_tick: Option<unsafe extern "C" fn(user_id: i32)>,
@@ -102,13 +100,8 @@ macro_rules! gua_plugin_export {
             let api_ref = &*api;
             GUA_API = Some(api_ref);
 
-            let name_bytes = concat!($crate::GuaPlugin::NAME, "\0");
-            let version_bytes = concat!($crate::GuaPlugin::VERSION, "\0");
-
             let v = &mut *vtable;
             v.vtable_size = std::mem::size_of::<$crate::PluginVtable>() as u32;
-            v.name = name_bytes.as_ptr() as *const i8;
-            v.version = version_bytes.as_ptr() as *const i8;
             v.init = Some(init_wrapper::<$plugin_type>);
             v.on_hotkey = Some(on_hotkey_wrapper::<$plugin_type>);
             v.on_tick = Some(on_tick_wrapper::<$plugin_type>);

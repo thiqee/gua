@@ -44,6 +44,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(debug_assertions)]
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {}\n", info);
         let _ = std::fs::write(config::config_dir().join("panic.log"), &msg);

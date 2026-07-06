@@ -37,8 +37,6 @@ pub unsafe extern "C" fn gua_plugin_load(api: *const GuaApi, vtable: *mut gua_sd
     GUA_API = Some(&*api);
     let v = &mut *vtable;
     v.vtable_size = std::mem::size_of::<gua_sdk::PluginVtable>() as u32;
-    v.name = "vd-hotkeys\0".as_ptr() as *const i8;
-    v.version = "0.1.0\0".as_ptr() as *const i8;
     v.init = Some(init_impl);
     v.on_hotkey = Some(on_hotkey_impl);
     v.on_config_reload = Some(on_config_reload_impl);

@@ -8,7 +8,6 @@ const fn hex(c: u32) -> Color {
 }
 
 pub struct Theme {
-    pub bg_sidebar: Color,
     pub bg_main: Color,
     pub bg_title: Color,
     pub bg_raised: Color,
@@ -27,7 +26,6 @@ pub struct Theme {
     pub text_white: Color,
     pub accent: Color,
     #[allow(dead_code)]
-    pub accent_light: Color,
     pub green: Color,
     pub red: Color,
     pub tab_text: Color,
@@ -36,7 +34,6 @@ pub struct Theme {
 }
 
 const DARK: &Theme = &Theme {
-    bg_sidebar:    hex(0x0F0F0F),
     bg_main:       hex(0x141414),
     bg_title:      hex(0x1F1F1F),
     bg_raised:     hex(0x1A1A1A),
@@ -54,7 +51,6 @@ const DARK: &Theme = &Theme {
     text_bright:   hex(0xD9D9D9),
     text_white:    hex(0xFFFFFF),
     accent:        hex(0x4A87CC),
-    accent_light:  hex(0x66A1E6),
     green:         hex(0x4DCC4D),
     red:           hex(0xA63326),
     tab_text:      hex(0x8C8C8C),
