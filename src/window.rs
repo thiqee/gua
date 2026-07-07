@@ -47,8 +47,8 @@ pub unsafe fn create_renderer(hwnd: HWND, s: &AppState) -> Result<GuaRenderer> {
         None,
         Some(&mut ctx),
     )?;
-    let device = device.unwrap();
-    let ctx = ctx.unwrap();
+    let device = match device { Some(d) => d, None => return Err(Error::from(HRESULT(-2147467259))) };
+    let ctx = match ctx { Some(c) => c, None => return Err(Error::from(HRESULT(-2147467259))) };
 
     let dxgi_device: IDXGIDevice = device.cast()?;
     let adapter = dxgi_device.GetAdapter()?;

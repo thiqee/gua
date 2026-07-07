@@ -568,8 +568,8 @@ pub unsafe extern "system" fn wndproc(
                         colorContext: std::mem::ManuallyDrop::new(None),
                     };
                     if let Ok(target) = r.d2d_context.CreateBitmapFromDxgiSurface(&back, Some(&props)) {
+                        r.d2d_context.SetTarget(&target);
                         r.target = Some(target);
-                        r.d2d_context.SetTarget(r.target.as_ref().unwrap());
                     }
                 }
             }
