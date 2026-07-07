@@ -95,8 +95,6 @@ pub struct PluginMeta {
     pub version: String,
     pub description: String,
     pub author: String,
-    #[allow(dead_code)]
-    pub homepage: String,
     pub dir: PathBuf,
 }
 
@@ -104,14 +102,6 @@ static mut PLUGIN_METAS: ST<Vec<PluginMeta>> = ST::new(Vec::new());
 
 pub fn plugin_metas() -> &'static Vec<PluginMeta> {
     unsafe { PLUGIN_METAS.r() }
-}
-
-/// 检查某个插件是否已加载（已加载表示已启用）
-#[allow(dead_code)]
-pub fn is_loaded(name: &str) -> bool {
-    unsafe {
-        PLUGINS.r().iter().any(|p| p.name == name)
-    }
 }
 
 // ── 内部状态 ──────────────────────────────────────────────────
@@ -352,8 +342,7 @@ fn parse_plugin_json(content: &str, dir: &Path) -> Option<PluginMeta> {
     let version = extract_json_str(content, "version").unwrap_or_default();
     let description = extract_json_str(content, "description").unwrap_or_default();
     let author = extract_json_str(content, "author").unwrap_or_default();
-    let homepage = extract_json_str(content, "homepage").unwrap_or_default();
-    Some(PluginMeta { name, binary, version, description, author, homepage, dir: dir.to_path_buf() })
+    Some(PluginMeta { name, binary, version, description, author, dir: dir.to_path_buf() })
 }
 
 fn scan_plugin_metas(plugin_dir: &Path) -> Vec<PluginMeta> {
@@ -552,26 +541,6 @@ pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
     false
 }
 
-#[allow(dead_code)]
-/// 通知所有插件配置已重载
-///
-/// # Safety
-/// - 需在插件已加载后调用
-pub unsafe fn notify_reload(configs: &HashMap<String, HashMap<String, String>>) {
-    *PLUGIN_CONFIGS.w() = Some(configs.clone());
-    let count = PLUGINS.r().len();
-    for i in 0..count {
-        CURRENT_PLUGIN_IDX.set(i);
-        let f = PLUGINS.r()[i].vtable.on_config_reload;
-        let _ = std::panic::catch_unwind(|| {
-            if let Some(f) = f {
-                f();
-            }
-        });
-        CURRENT_PLUGIN_IDX.set(usize::MAX);
-    }
-}
-
 /// 分发窗口消息给插件，返回 true 表示插件已处理
 ///
 /// # Safety
@@ -643,12 +612,4 @@ unsafe fn unregister_all_for_plugin(idx: usize) {
     if let Some(ref mut map) = *TIMER_MAP.w() {
         map.retain(|_, &mut (i, _)| i != idx);
     }
-}
-
-#[allow(dead_code)]
-/// 获取 gua.exe 所在目录
-fn get_exe_dir() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
 }

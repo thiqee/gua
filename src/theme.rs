@@ -25,7 +25,6 @@ pub struct Theme {
     pub text_bright: Color,
     pub text_white: Color,
     pub accent: Color,
-    #[allow(dead_code)]
     pub green: Color,
     pub red: Color,
     pub tab_text: Color,
