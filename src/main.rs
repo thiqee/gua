@@ -17,9 +17,11 @@ mod window;
 mod wndproc;
 
 use std::ptr;
+use std::sync::atomic::Ordering;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -156,7 +158,7 @@ fn main() -> Result<()> {
             text_brush: None,
             white_brush: None,
             renderer: ptr::null_mut(),
-            device_recover_attempts: 0,
+            device_recovering: false,
             composing: String::new(),
             panel_ratio_x,
             panel_ratio_y,
@@ -171,7 +173,7 @@ fn main() -> Result<()> {
 
         let boxed = Box::into_raw(Box::new(state));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, boxed as isize);
-        MAIN_HWND = hwnd.0 as usize;
+        MAIN_HWND.store(hwnd.0 as usize, Ordering::Relaxed);
 
         // 创建渲染器
         let s = &mut *boxed;
@@ -216,7 +218,12 @@ fn main() -> Result<()> {
         if ptr != 0 {
             let s = &mut *(ptr as *mut AppState);
             if !s.renderer.is_null() {
-                let _ = Box::from_raw(s.renderer);
+                let r = Box::from_raw(s.renderer);
+                let was_initialized = r.com_initialized;
+                drop(r);
+                if was_initialized {
+                    CoUninitialize();
+                }
                 s.renderer = ptr::null_mut();
             }
             drop(Box::from_raw(ptr as *mut AppState));
