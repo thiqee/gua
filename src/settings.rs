@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ptr;
+use std::sync::atomic::Ordering;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -32,10 +33,6 @@ extern "system" {
 extern "system" {
     fn SetCapture(hWnd: HWND) -> HWND;
     fn ReleaseCapture() -> BOOL;
-    fn ImmGetContext(hwnd: HWND) -> isize;
-    fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
-    fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
-    fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
 }
 
 const S_W: i32 = 780;
@@ -89,7 +86,7 @@ pub struct SettingsWin {
 static mut SETTINGS: Option<SettingsWin> = None;
 
 unsafe fn main_state() -> *mut AppState {
-    let hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    let hwnd = HWND(MAIN_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
     if hwnd.0.is_null() { return ptr::null_mut(); }
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     ptr as *mut AppState
@@ -407,7 +404,7 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
     let new_hotkey = cs("_hotkey", "Alt+Space");
     if let Some((new_mod, new_vk)) = parse_hotkey(&new_hotkey) {
         if new_mod != state.mod_keys || new_vk != state.hotkey_vk {
-            let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+            let main_hwnd = HWND(MAIN_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
             let _ = UnregisterHotKey(main_hwnd, HOTKEY_ID);
             if RegisterHotKey(main_hwnd, HOTKEY_ID, new_mod, new_vk).as_bool() {
                 state.mod_keys = new_mod;
@@ -419,7 +416,7 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
     }
 
     // 插件
-    let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    let main_hwnd = HWND(MAIN_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
     let plugin_cfgs = config::build_plugin_configs(&settings);
     plugin::load_all(main_hwnd, &plugin_cfgs);
     }));
@@ -430,7 +427,7 @@ unsafe fn do_save(s: &mut SettingsWin, h: HWND, destroy: bool) {
     let _ = InvalidateRect(Some(h), None, true);
 
     // 即时应用宽度/位置变化（主窗口可见时）
-    let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    let main_hwnd = HWND(MAIN_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
     if !main_hwnd.0.is_null() && IsWindowVisible(main_hwnd).as_bool() {
         let state = &mut *state_ptr;
         let mut rc = RECT::default();
@@ -740,7 +737,12 @@ pub unsafe fn open_settings(_h: HWND, r: &GuaRenderer) {
         lpszClassName: PCWSTR(cn.as_ptr()),
         ..Default::default()
     };
-    RegisterClassW(&wc);
+    if RegisterClassW(&wc) == 0 {
+        let err = unsafe { GetLastError() };
+        if err != ERROR_CLASS_ALREADY_EXISTS {
+            plog(&format!("open_settings: RegisterClassW 失败 GetLastError={err:?}"));
+        }
+    }
 
     let hwnd_s = match CreateWindowExW(
         WS_EX_NOREDIRECTIONBITMAP, PCWSTR(cn.as_ptr()), w!("Gua 设置"),
@@ -890,7 +892,7 @@ fn format_hotkey_string(vk: u32, mod_held: &[bool; 4]) -> String {
 unsafe fn set_capturing(s: &mut SettingsWin, capturing: bool) {
     if s.capturing_hotkey == capturing { return; }
     s.capturing_hotkey = capturing;
-    let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+    let main_hwnd = HWND(MAIN_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
     if main_hwnd.0.is_null() { return; }
     if capturing {
         let _ = UnregisterHotKey(main_hwnd, HOTKEY_ID);
@@ -1400,7 +1402,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                                         } else {
                                             s.settings.push(config::Entry { key: "_enabled".into(), value: if enabled { "true".to_string() } else { "false".to_string() }, category: Some(cat_name), description: None });
                                         }
-                                        let main_hwnd = HWND(MAIN_HWND as *mut std::ffi::c_void);
+                                        let main_hwnd = HWND(MAIN_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void);
                                         let plugin_cfgs = config::build_plugin_configs(&s.settings);
                                         plugin::load_all(main_hwnd, &plugin_cfgs);
                                         s.plugins_version += 1;

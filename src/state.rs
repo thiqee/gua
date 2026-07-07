@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::sync::LazyLock;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{LazyLock, Mutex};
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -62,6 +63,14 @@ pub const CFS_FORCE_POSITION: u32 = 0x0020;
 pub const ISC_SHOWUICOMPOSITIONWINDOW: u32 = 0x80000000;
 pub const GCS_COMPSTR: u32 = 0x0008;
 pub const GCS_RESULTSTR: u32 = 0x0800;
+
+#[link(name = "imm32")]
+extern "system" {
+    pub fn ImmGetContext(hwnd: HWND) -> isize;
+    pub fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
+    pub fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
+    pub fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
+}
 
 // ── D2D 渲染器 ─────────────────────────────────────────────────
 
@@ -137,6 +146,11 @@ pub struct MemPrio {
 pub const PROCESS_MEMORY_PRIORITY: i32 = 0;
 pub const MEM_PRIO_VERY_LOW: u32 = 1;
 pub const MEM_PRIO_NORMAL: u32 = 5;
+
+#[link(name = "kernel32")]
+extern "system" {
+    pub fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
+}
 
 pub fn to_w(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
@@ -433,7 +447,7 @@ pub struct AppState {
     pub text_brush: Option<ID2D1SolidColorBrush>,
     pub white_brush: Option<ID2D1SolidColorBrush>,
     pub renderer: *mut GuaRenderer,
-    pub device_recover_attempts: u32,
+    pub device_recovering: bool,
     pub composing: String,
     /// 面板水平位置比例 0.0~1.0，由 _panel_position_x 配置计算
     pub panel_ratio_x: f32,
@@ -549,27 +563,24 @@ pub fn load_private_fonts() -> Option<String> {
         new_paths.push(full.to_string_lossy().to_string());
     }
 
-    unsafe {
-        // 原子对换：REGISTERED_FONTS 取新值，new_paths 取旧值
-        core::ptr::swap(core::ptr::addr_of_mut!(REGISTERED_FONTS), &mut new_paths);
-    }
-    let registered: &Vec<String> = unsafe { &*core::ptr::addr_of!(REGISTERED_FONTS) };
+    let mut registered = match REGISTERED_FONTS.lock() {
+        Ok(g) => g,
+        Err(_) => return None,
+    };
+    let old_paths = std::mem::replace(&mut *registered, new_paths);
 
-    // 取消注册已删除的字体（旧路径不在新路径中）
-    for old in &new_paths {
+    for old in &old_paths {
         if !registered.contains(old) {
             let ws: Vec<u16> = std::ffi::OsStr::new(old).encode_wide().chain(Some(0)).collect();
             unsafe { RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
         }
     }
-    // 注册新增的字体（新路径不在旧路径中）
-    for f in registered {
-        if !new_paths.contains(f) {
+    for f in registered.iter() {
+        if !old_paths.contains(f) {
             let ws: Vec<u16> = std::ffi::OsStr::new(f).encode_wide().chain(Some(0)).collect();
             unsafe { AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
         }
     }
-    // new_paths 出作用域 → 释放旧路径分配
 
     // 返回第一个字体的家族名（给没有配 _font 的场景自动选择）
     for entry in &entries {
@@ -607,9 +618,9 @@ pub fn scan_font_families() -> Vec<String> {
     result
 }
 
-static mut REGISTERED_FONTS: Vec<String> = Vec::new();
+static REGISTERED_FONTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-pub static mut MAIN_HWND: usize = 0;
+pub static MAIN_HWND: AtomicUsize = AtomicUsize::new(0);
 
 // ── 匹配 ────────────────────────────────────────────────────────
 

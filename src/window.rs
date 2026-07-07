@@ -18,11 +18,6 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
-}
-
 use crate::executor;
 use crate::state::*;
 
@@ -33,6 +28,15 @@ pub unsafe fn create_renderer(hwnd: HWND, s: &AppState) -> Result<GuaRenderer> {
         return Err(Error::from(hr));
     }
     let com_initialized = hr.0 == 0;
+
+    let result = create_renderer_impl(hwnd, s, com_initialized);
+    if result.is_err() && com_initialized {
+        CoUninitialize();
+    }
+    result
+}
+
+unsafe fn create_renderer_impl(hwnd: HWND, s: &AppState, com_initialized: bool) -> Result<GuaRenderer> {
 
     let mut device: Option<ID3D11Device> = None;
     let mut ctx: Option<ID3D11DeviceContext> = None;
@@ -146,7 +150,11 @@ pub unsafe fn recreate_renderer(s: &mut AppState, h: HWND) {
 
     if !s.renderer.is_null() {
         let r = Box::from_raw(s.renderer);
+        let was_initialized = r.com_initialized;
         drop(r);
+        if was_initialized {
+            CoUninitialize();
+        }
     }
     s.renderer = ptr::null_mut();
 

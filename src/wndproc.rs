@@ -19,11 +19,6 @@ extern "system" {
     fn GetKeyState(vk: i32) -> i16;
 }
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
-}
-
 use crate::config;
 use crate::draw::*;
 use crate::plugin;
@@ -32,14 +27,6 @@ use crate::theme;
 use crate::widget::{clipboard_copy, clipboard_paste};
 use crate::tray;
 use crate::window::*;
-
-#[link(name = "imm32")]
-extern "system" {
-    fn ImmGetContext(hwnd: HWND) -> isize;
-    fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
-    fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
-    fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
-}
 
 const D2DERR_RECREATE_TARGET: i32 = 0x88990002_u32 as _;
 
@@ -70,7 +57,7 @@ pub unsafe extern "system" fn wndproc(
         WM_ERASEBKGND => return LRESULT(1),
 
         WM_PAINT => {
-            if s.device_recover_attempts > 0 || s.renderer.is_null() {
+            if s.device_recovering || s.renderer.is_null() {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(h, &mut ps);
                 let _ = EndPaint(h, &ps);
@@ -195,13 +182,13 @@ pub unsafe extern "system" fn wndproc(
             // EndDraw
             if let Err(e) = r.d2d_context.EndDraw(None, None) {
                 if is_device_lost(&e.code()) {
-                    s.device_recover_attempts = 1;
+                    s.device_recovering = true;
                     let _ = EndPaint(h, &ps);
                     recreate_renderer(s, h);
                     if s.renderer.is_null() {
                         return LRESULT(0);
                     }
-                    s.device_recover_attempts = 0;
+                    s.device_recovering = false;
                     let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                     return LRESULT(0);
                 }
@@ -211,13 +198,13 @@ pub unsafe extern "system" fn wndproc(
             let flags = if r.supports_tearing { DXGI_PRESENT_ALLOW_TEARING } else { DXGI_PRESENT(0) };
             let hr = r.swap_chain.Present(0, flags);
             if is_device_lost(&hr) {
-                s.device_recover_attempts = 1;
+                s.device_recovering = true;
                 let _ = EndPaint(h, &ps);
                 recreate_renderer(s, h);
                 if s.renderer.is_null() {
                     return LRESULT(0);
                 }
-                s.device_recover_attempts = 0;
+                s.device_recovering = false;
                 let _ = RedrawWindow(Some(h), None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
                 return LRESULT(0);
             }
