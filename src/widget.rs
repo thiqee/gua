@@ -800,8 +800,15 @@ impl Widget for ThreeDotsButton {
         let item_h = 28.0;
         let popup_h = self.items.len() as f32 * item_h + 8.0;
         if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
-            let mi = ((y - popup_t - 4.0) / item_h) as i32;
-            self.hovered = mi.min(self.items.len() as i32 - 1);
+            let rel_y = y - popup_t - 4.0;
+            if rel_y >= 0.0 {
+                let mi = (rel_y / 28.0) as usize;
+                let item_top = popup_t + 4.0 + mi as f32 * 28.0;
+                let item_bottom = item_top + 26.0;
+                if mi < self.items.len() && y >= item_top && y <= item_bottom {
+                    self.hovered = mi as i32;
+                }
+            }
         }
     }
     fn on_mouse_leave(&mut self) { self.hovered = -1; }
@@ -814,11 +821,16 @@ impl Widget for ThreeDotsButton {
             let item_h = 28.0;
             let popup_h = self.items.len() as f32 * item_h + 8.0;
             if x >= popup_l && x <= popup_l + 120.0 && y >= popup_t && y <= popup_t + popup_h {
-                let mi = ((y - popup_t - 4.0) / item_h) as usize;
-                if mi < self.items.len() {
-                    self.selected = Some(mi);
-                    self.open = false;
-                    return true;
+                let rel_y = y - popup_t - 4.0;
+                if rel_y >= 0.0 {
+                    let mi = (rel_y / 28.0) as usize;
+                    let item_top = popup_t + 4.0 + mi as f32 * 28.0;
+                    let item_bottom = item_top + 26.0;
+                    if mi < self.items.len() && y >= item_top && y <= item_bottom {
+                        self.selected = Some(mi);
+                        self.open = false;
+                        return true;
+                    }
                 }
             }
             self.open = false;
