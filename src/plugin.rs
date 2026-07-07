@@ -188,6 +188,10 @@ unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i
         plog("register_hotkey: 不在插件上下文中");
         return -1;
     }
+    if idx >= PLUGINS.r().len() {
+        plog("register_hotkey: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
+        return -1;
+    }
     if !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
         plog(&format!("register_hotkey: user_id {} 超出范围", user_id));
         return -1;
@@ -215,6 +219,10 @@ unsafe extern "C" fn unregister_hotkey_impl(user_id: i32) {
     if idx == usize::MAX {
         return;
     }
+    if idx >= PLUGINS.r().len() {
+        plog("unregister_hotkey: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
+        return;
+    }
     let plugins = PLUGINS.w();
     if let Some(&internal_id) = plugins[idx].user_to_internal.get(&user_id) {
         let _ = UnregisterHotKey(gua_hwnd(), internal_id).as_bool();
@@ -226,6 +234,10 @@ unsafe extern "C" fn unregister_hotkey_impl(user_id: i32) {
 unsafe extern "C" fn get_config_impl(key: *const i8, buf: *mut i8, buf_size: i32) -> i32 {
     let idx = CURRENT_PLUGIN_IDX.get();
     if idx == usize::MAX || key.is_null() {
+        return -1;
+    }
+    if idx >= PLUGINS.r().len() {
+        plog("get_config: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
         return -1;
     }
     let plugin_name = PLUGINS.r()[idx].name.clone();
@@ -265,6 +277,10 @@ unsafe extern "C" fn set_timer_impl(interval_ms: u32, user_id: i32) -> i32 {
     if idx == usize::MAX || !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
         return -1;
     }
+    if idx >= PLUGINS.r().len() {
+        plog("set_timer: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
+        return -1;
+    }
     let timer_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + 256 + user_id;
     if SetTimer(gua_hwnd(), timer_id as usize, interval_ms, None) == 0 {
         return -1;
@@ -278,6 +294,10 @@ unsafe extern "C" fn set_timer_impl(interval_ms: u32, user_id: i32) -> i32 {
 unsafe extern "C" fn kill_timer_impl(user_id: i32) {
     let idx = CURRENT_PLUGIN_IDX.get();
     if idx == usize::MAX || !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
+        return;
+    }
+    if idx >= PLUGINS.r().len() {
+        plog("kill_timer: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
         return;
     }
     let timer_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + 256 + user_id;
@@ -382,7 +402,7 @@ pub unsafe fn load_all(
     if !plugin_dir.is_dir() { return; }
 
     let configs = PLUGIN_CONFIGS.r();
-    let configs = configs.as_ref().unwrap();
+    let configs = match configs.as_ref() { Some(c) => c, None => return };
 
     // 1. 扫描所有 plugin.json
     let metas = scan_plugin_metas(&plugin_dir);
@@ -415,13 +435,15 @@ pub unsafe fn load_all(
         }
 
         let load_fn_name = b"gua_plugin_load\0";
-        let proc = GetProcAddress(lib, load_fn_name.as_ptr());
-        if proc.is_none() {
-            plog(&format!("{}: 缺少 gua_plugin_load 导出", name));
-            let _ = FreeLibrary(lib);
-            continue;
-        }
-        let load_fn: GuaPluginLoadFn = std::mem::transmute(proc.unwrap());
+        let proc = match GetProcAddress(lib, load_fn_name.as_ptr()) {
+            Some(p) => p,
+            None => {
+                plog(&format!("{}: 缺少 gua_plugin_load 导出", name));
+                let _ = FreeLibrary(lib);
+                continue;
+            }
+        };
+        let load_fn: GuaPluginLoadFn = std::mem::transmute(proc);
 
         let mut vtable = PluginVtable {
             vtable_size: 0,
