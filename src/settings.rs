@@ -97,7 +97,9 @@ unsafe fn main_state() -> *mut AppState {
 
 fn card_hdr(name: &str, w: &mut Vec<Box<dyn Widget>>, y: &mut f32, cx: f32, card_r: f32) {
     w.push(Box::new(GroupHeader::new(name)));
-    w.last_mut().unwrap().set_bounds(D2D_RECT_F { left: cx, top: *y, right: card_r, bottom: *y + ROW_H });
+    if let Some(last) = w.last_mut() {
+        last.set_bounds(D2D_RECT_F { left: cx, top: *y, right: card_r, bottom: *y + ROW_H });
+    }
     *y += 36.0;
 }
 
@@ -1718,15 +1720,14 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
     DefWindowProcW(h, msg, wp, lp)
 }
 
-#[allow(dead_code)]
 pub unsafe fn is_open() -> bool { SETTINGS.is_some() }
 
-#[allow(dead_code)]
 pub unsafe fn close_settings() {
-    if let Some(ref s) = SETTINGS {
-        let _ = DestroyWindow(s.hwnd);
-    }
-    SETTINGS = None;
+    let hwnd = match &SETTINGS {
+        Some(s) => s.hwnd,
+        None => return,
+    };
+    let _ = SendMessageW(hwnd, WM_CLOSE, Some(WPARAM(0)), Some(LPARAM(0)));
 }
 
 

@@ -208,6 +208,9 @@ fn main() -> Result<()> {
             DispatchMessageW(&msg);
         }
 
+        if settings::is_open() {
+            settings::close_settings();
+        }
         plugin::unload_all();
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         if ptr != 0 {
