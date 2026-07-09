@@ -9,5 +9,11 @@ config.toml
 # pi 配置（含系统提示词、项目工作流规则等）
 .pi/
 
+# 插件目录（插件未开放前整个忽略）
+/plugins/
+
+# 无用脚手架
+src/lib.rs
+
 # 编译产物
 gua.exe
