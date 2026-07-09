@@ -3,8 +3,16 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{LazyLock, Mutex};
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::Common::*;
+use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -19,8 +27,7 @@ pub const MV: usize = 8;
 pub const FW: f32 = 18.0;
 pub const FUZZY_MATCH_DEFAULT: bool = true;
 pub const PINYIN_SEARCH_DEFAULT: bool = true;
-pub const CONFIG_FILE: &str = "config.toml";
-
+/// 配置路径改为动态获取: config::config_path()
 pub const HOTKEY_ID: i32 = 1;
 
 pub const TRAY_MSG: u32 = WM_APP + 256;
@@ -28,6 +35,7 @@ pub const TRAY_ID: u32 = 1;
 pub const IDM_TOGGLE: u16 = 100;
 pub const IDM_OPEN_CONFIG: u16 = 101;
 pub const IDM_EXIT: u16 = 102;
+pub const IDM_SETTINGS: u16 = 103;
 pub const MOD_ALT: u32 = 1;
 pub const MOD_CONTROL: u32 = 2;
 pub const MOD_SHIFT: u32 = 4;
@@ -44,7 +52,7 @@ extern "system" {
 }
 
 #[repr(C)]
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
 pub struct COMPOSITIONFORM {
     pub dwStyle: u32,
     pub ptCurrentPos: POINT,
@@ -55,6 +63,51 @@ pub const CFS_FORCE_POSITION: u32 = 0x0020;
 pub const ISC_SHOWUICOMPOSITIONWINDOW: u32 = 0x80000000;
 pub const GCS_COMPSTR: u32 = 0x0008;
 pub const GCS_RESULTSTR: u32 = 0x0800;
+
+#[link(name = "imm32")]
+extern "system" {
+    pub fn ImmGetContext(hwnd: HWND) -> isize;
+    pub fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
+    pub fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
+    pub fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
+}
+
+// ── D2D 渲染器 ─────────────────────────────────────────────────
+
+#[allow(dead_code)]
+pub struct GuaRenderer {
+    pub d3d_device: ID3D11Device,
+    pub d3d_context: ID3D11DeviceContext,
+    pub dxgi_factory: IDXGIFactory2,
+    pub swap_chain: IDXGISwapChain1,
+    pub supports_tearing: bool,
+    pub d2d_factory: ID2D1Factory1,
+    pub d2d_device: ID2D1Device,
+    pub d2d_context: ID2D1DeviceContext,
+    pub dwrite_factory: IDWriteFactory,
+    pub target: Option<ID2D1Bitmap1>,
+    pub dcomp_device: Option<IDCompositionDevice>,
+    pub dcomp_visual: Option<IDCompositionVisual>,
+    pub dcomp_target: Option<IDCompositionTarget>,
+    pub com_initialized: bool,
+}
+
+pub fn gua_renderer(s: &AppState) -> Option<&GuaRenderer> {
+    if s.renderer.is_null() { None } else { Some(unsafe { &*s.renderer }) }
+}
+
+pub fn gua_renderer_mut(s: &mut AppState) -> Option<&mut GuaRenderer> {
+    if s.renderer.is_null() { None } else { Some(unsafe { &mut *s.renderer }) }
+}
+
+pub fn color_to_d2d(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: ((rgb >> 16) & 0xFF) as f32 / 255.0,
+        g: ((rgb >> 8) & 0xFF) as f32 / 255.0,
+        b: (rgb & 0xFF) as f32 / 255.0,
+        a: alpha,
+    }
+}
 
 // ── helpers ─────────────────────────────────────────────────────
 
@@ -85,13 +138,6 @@ pub fn cfg_color(entries: &[config::Entry], key: &str, default: u32) -> u32 {
         .and_then(|e| u32::from_str_radix(e.value.trim_start_matches('#'), 16).ok())
         .unwrap_or(default)
 }
-pub fn colorref(rgb: u32) -> COLORREF {
-    let r = (rgb >> 16) & 0xFF;
-    let g = (rgb >> 8) & 0xFF;
-    let b = rgb & 0xFF;
-    COLORREF((b << 16) | (g << 8) | r)
-}
-
 #[repr(C)]
 pub struct MemPrio {
     pub priority: u32,
@@ -101,9 +147,17 @@ pub const PROCESS_MEMORY_PRIORITY: i32 = 0;
 pub const MEM_PRIO_VERY_LOW: u32 = 1;
 pub const MEM_PRIO_NORMAL: u32 = 5;
 
+#[link(name = "kernel32")]
+extern "system" {
+    pub fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
+}
+
 pub fn to_w(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
+
+pub static FONT_FAMILY: LazyLock<Vec<u16>> = LazyLock::new(|| to_w("Microsoft YaHei"));
+pub static FONT_LOCALE: LazyLock<Vec<u16>> = LazyLock::new(|| to_w("en-us"));
 
 pub fn pcwstr(v: &[u16]) -> PCWSTR {
     PCWSTR(v.as_ptr())
@@ -141,20 +195,6 @@ pub fn entry_type(val: &str) -> &'static str {
         "\u{6587}\u{4EF6}"
     } else {
         "\u{5176}\u{4ED6}"
-    }
-}
-
-/// 为窗口设置圆角裁剪区域
-///
-/// # Safety
-/// - `h` 必须是有效的窗口句柄
-/// - 调用后窗口区域可能改变，后续绘制应配合新区域
-pub unsafe fn round_win(h: HWND, w: i32, hh: i32, corner: i32) {
-    let rgn = CreateRoundRectRgn(0, 0, w, hh, corner, corner);
-    if !rgn.is_invalid() {
-        if SetWindowRgn(h, Some(rgn), true) == 0 {
-            let _ = DeleteObject(HGDIOBJ(rgn.0));
-        }
     }
 }
 
@@ -198,10 +238,10 @@ fn vk_code(name: &str) -> Option<u32> {
     // A-Z, 0-9
     if bytes.len() == 1 {
         let b = bytes[0];
-        if b'A' <= b && b <= b'Z' {
+        if b.is_ascii_uppercase() {
             return Some(b as u32);
         }
-        if b'0' <= b && b <= b'9' {
+        if b.is_ascii_digit() {
             return Some(b as u32);
         }
     }
@@ -245,6 +285,9 @@ fn vk_code(name: &str) -> Option<u32> {
         "-" | "MINUS" | "HYPHEN" => Some(0xBD),
         "=" | "EQUALS" | "EQUAL" => Some(0xBB),
         "`" | "BACKTICK" | "TILDE" | "GRAVE" => Some(0xC0),
+        "*" | "MULTIPLY" => Some(0x6A),
+        "+" | "ADD" | "PLUS" => Some(0x6B),
+        "SEPARATOR" | "SEP" => Some(0x6C),
         _ => None,
     }
 }
@@ -273,22 +316,26 @@ pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
 // ── 黑名单 ──────────────────────────────────────────────────────
 
 /// 解析 _pinyin_overrides 多音字追加读音配置
-/// 格式：_pinyin_overrides = 茄=qie, 了=le  （逗号分隔）
+/// 格式：_pinyin_overrides = 茄(qie);了(le)
 /// 或分行：
-///   _pinyin_overrides = 茄=qie
-///   _pinyin_overrides = 了=le
+///   _pinyin_overrides = 茄(qie)
+///   _pinyin_overrides = 了(le)
 /// 每个字对应一个追加读音列表（不覆盖 crate 默认读音）
 pub fn cfg_pinyin_overrides(entries: &[config::Entry], key: &str) -> HashMap<char, Vec<String>> {
     let mut map: HashMap<char, Vec<String>> = HashMap::new();
     for entry in entries.iter().filter(|e| e.key == key) {
-        for part in entry.value.split(',') {
-            let part = part.trim().trim_matches('"').trim_matches('\'');
-            if let Some(pos) = part.find('=') {
-                let ch = part[..pos].trim().chars().next();
-                let py = part[pos + 1..].trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                if let Some(c) = ch {
+        for part in entry.value.split(';') {
+            let part = part.trim();
+            if part.is_empty() { continue; }
+            if let Some(paren_pos) = part.find('(') {
+                let ch = part[..paren_pos].trim().chars().next();
+                let inner = part[paren_pos + 1..].trim_end_matches(')').trim();
+                for py in inner.split([',', '、']) {
+                    let py = py.trim().to_lowercase();
                     if !py.is_empty() {
-                        map.entry(c).or_insert_with(Vec::new).push(py);
+                        if let Some(c) = ch {
+                            map.entry(c).or_default().push(py);
+                        }
                     }
                 }
             }
@@ -366,17 +413,18 @@ pub unsafe fn get_foreground_exe() -> Option<String> {
 
 pub struct AppState {
     pub entries: Vec<config::Entry>,
-    pub filter: String,
     pub input_text: String,
     pub cursor_pos: usize,
+    pub sel_start: Option<usize>,
+    pub sel_end: usize,
     pub search_query: String,
     pub filtered_indices: Vec<usize>,
     pub sel_index: usize,
     pub scroll_offset: usize,
     pub input_rect: RECT,
     pub visible: bool,
-    pub hfont: Option<HFONT>,
-    pub status_hfont: Option<HFONT>,
+    pub text_format: Option<IDWriteTextFormat>,
+    pub status_text_format: Option<IDWriteTextFormat>,
     pub status_font_size: f32,
     pub font_name: String,
     pub font_size: f32,
@@ -386,7 +434,6 @@ pub struct AppState {
     pub max_results: usize,
     pub width: i32,
     pub round_corner: i32,
-    pub always_on_top: bool,
     pub opacity: u8,
     pub case_sensitive: bool,
     pub hide_on_focus_loss: bool,
@@ -394,12 +441,20 @@ pub struct AppState {
     pub input_bg_color: u32,
     pub accent_color: u32,
     pub text_color: u32,
+    pub theme_brush: Option<ID2D1SolidColorBrush>,
+    pub input_bg_brush: Option<ID2D1SolidColorBrush>,
+    pub accent_brush: Option<ID2D1SolidColorBrush>,
+    pub text_brush: Option<ID2D1SolidColorBrush>,
+    pub white_brush: Option<ID2D1SolidColorBrush>,
+    pub renderer: *mut GuaRenderer,
+    pub device_recovering: bool,
     pub composing: String,
-    pub config_mtime: Option<std::time::SystemTime>,
     /// 面板水平位置比例 0.0~1.0，由 _panel_position_x 配置计算
     pub panel_ratio_x: f32,
     /// 面板垂直位置比例 0.0~1.0，由 _panel_position_y 配置计算
     pub panel_ratio_y: f32,
+    /// 识别码分类展开/折叠状态
+    pub codes_cat_state: Vec<bool>,
     /// 当前热键修饰键位掩码，由 _hotkey 配置解析
     pub mod_keys: u32,
     /// 当前热键虚拟键码，由 _hotkey 配置解析
@@ -414,124 +469,55 @@ pub struct AppState {
     pub pinyin_enabled: bool,
     /// 多音字覆写表：字 → 追加读音列表，匹配时与 crate 默认读音共存
     pub pinyin_overrides: HashMap<char, Vec<String>>,
-}
-
-/// 从字体名和尺寸创建 GDI 字体对象
-///
-/// # Safety
-/// - GDI 必须已初始化
-/// - 返回的 HFONT 在不再使用时应由调用者通过 `DeleteObject` 释放
-pub unsafe fn make_font_with(dpi: i32, name: &str, size: f32) -> Result<HFONT> {
-    let sz = -((size as i32 * dpi / 96) as i32);
-    let pitch = FONT_PITCH(DEFAULT_PITCH.0 | FF_DONTCARE.0);
-    let ws = to_w(name);
-    let font = CreateFontW(
-        sz, 0, 0, 0,
-        FW_NORMAL.0 as i32,
-        0, 0, 0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        FONT_QUALITY(5),
-        pitch.0 as u32,
-        PCWSTR(ws.as_ptr()),
-    );
-    if font.0.is_null() {
-        return Err(Error::empty());
-    }
-    Ok(font)
+    /// 输入框撤销栈
+    pub input_undo: Vec<(String, usize)>,
 }
 
 // ── 私有字体加载 ────────────────────────────────────────────────
 
-/// 从字体文件的 name table 中读取 Font Family 名称（name ID = 1）
-/// Windows 平台优先，其次 Mac 平台；英文优先，其他语言次之。
 fn read_font_family(data: &[u8]) -> Option<String> {
-    let buf = |off: usize, len: usize| -> Option<&[u8]> {
-        data.get(off..off + len)
-    };
-    let u16be = |off: usize| -> Option<u16> {
-        let b = buf(off, 2)?;
-        Some(u16::from_be_bytes([b[0], b[1]]))
-    };
-    let u32be = |off: usize| -> Option<u32> {
-        let b = buf(off, 4)?;
-        Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
-    };
-
+    let buf = |off: usize, len: usize| -> Option<&[u8]> { data.get(off..off + len) };
+    let u16be = |off: usize| -> Option<u16> { let b = buf(off, 2)?; Some(u16::from_be_bytes([b[0], b[1]])) };
+    let u32be = |off: usize| -> Option<u32> { let b = buf(off, 4)?; Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]])) };
     let num_tables = u16be(4)? as usize;
-
-    // 在 table directory 中查找 "name" 表
     let mut name_off = None;
     let mut name_len = None;
     for i in 0..num_tables {
         let entry = 12 + i * 16;
         let tag = buf(entry, 4)?;
-        if tag == b"name" {
-            name_off = Some(u32be(entry + 8)? as usize);
-            name_len = Some(u32be(entry + 12)? as usize);
-            break;
-        }
+        if tag == b"name" { name_off = Some(u32be(entry + 8)? as usize); name_len = Some(u32be(entry + 12)? as usize); break; }
     }
-    let name_off = name_off?;
-    let name_len = name_len?;
+    let name_off = name_off?; let name_len = name_len?;
     let nt = buf(name_off, name_len)?;
-
     let format = u16be(name_off)?;
     let count = u16be(name_off + 2)? as usize;
     let string_off = u16be(name_off + 4)? as usize;
-
-    // 计算 NameRecord 起始偏移：format=1 时有额外的语言标签区
-    let name_record_off = if format == 0 {
-        name_off + 6
-    } else if format == 1 {
-        let lang_tag_count = u16be(name_off + 6)? as usize;
-        name_off + 6 + 2 + lang_tag_count * 12
-    } else {
-        return None;
-    };
-
-    // 收集所有 nameID = 1 的记录，优先 Windows/英文
-    struct Rec {
-        platform: u16,
-        encoding: u16,
-        lang: u16,
-        offset: usize,
-        length: usize,
-    }
+    let name_record_off = if format == 0 { name_off + 6 }
+        else if format == 1 { let lang_tag_count = u16be(name_off + 6)? as usize; name_off + 6 + 2 + lang_tag_count * 12 }
+        else { return None; };
+    struct Rec { platform: u16, encoding: u16, lang: u16, offset: usize, length: usize }
     let mut candidates: Vec<Rec> = Vec::new();
+    let mut fallback1: Vec<Rec> = Vec::new();
     for i in 0..count {
         let r = name_record_off + i * 12;
-        let platform = u16be(r)?;
-        let encoding = u16be(r + 2)?;
-        let lang = u16be(r + 4)?;
-        let name_id = u16be(r + 6)?;
-        let length = u16be(r + 8)? as usize;
-        let offset = u16be(r + 10)? as usize;
-        if name_id == 1 {
-            candidates.push(Rec { platform, encoding, lang, offset, length });
-        }
+        let platform = u16be(r)?; let encoding = u16be(r + 2)?; let lang = u16be(r + 4)?;
+        let name_id = u16be(r + 6)?; let length = u16be(r + 8)? as usize; let offset = u16be(r + 10)? as usize;
+        if name_id == 16 { candidates.push(Rec { platform, encoding, lang, offset, length }); }
+        if name_id == 1 { fallback1.push(Rec { platform, encoding, lang, offset, length }); }
     }
-
-    // 优先 Windows (platform=3) + 英文 (lang=0x0409)
+    if candidates.is_empty() { candidates = fallback1; }
     for c in &candidates {
         if c.platform == 3 && c.lang == 0x0409 {
             let Some(start) = string_off.checked_add(c.offset) else { continue; };
             if start + c.length > nt.len() { continue; }
             let raw = &nt[start..start + c.length];
             if c.encoding == 1 || c.encoding == 10 {
-                // UTF-16BE
                 let mut u16s = Vec::with_capacity(c.length / 2);
-                for j in (0..c.length).step_by(2) {
-                    if j + 2 <= raw.len() {
-                        u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]]));
-                    }
-                }
+                for j in (0..c.length).step_by(2) { if j + 2 <= raw.len() { u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]])); } }
                 return Some(String::from_utf16_lossy(&u16s));
             }
         }
     }
-    // 其次 Windows 任意语言
     for c in &candidates {
         if c.platform == 3 {
             let Some(start) = string_off.checked_add(c.offset) else { continue; };
@@ -539,26 +525,121 @@ fn read_font_family(data: &[u8]) -> Option<String> {
             let raw = &nt[start..start + c.length];
             if c.encoding == 1 || c.encoding == 10 {
                 let mut u16s = Vec::with_capacity(c.length / 2);
-                for j in (0..c.length).step_by(2) {
-                    if j + 2 <= raw.len() {
-                        u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]]));
-                    }
-                }
+                for j in (0..c.length).step_by(2) { if j + 2 <= raw.len() { u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]])); } }
                 return Some(String::from_utf16_lossy(&u16s));
             }
         }
     }
-    // 最后 Mac（platform=1，ASCII/MacRoman）
     for c in &candidates {
         if c.platform == 1 {
             let Some(start) = string_off.checked_add(c.offset) else { continue; };
             if start + c.length > nt.len() { continue; }
-            let raw = &nt[start..start + c.length];
-            return Some(String::from_utf8_lossy(raw).to_string());
+            return Some(String::from_utf8_lossy(&nt[start..start + c.length]).to_string());
         }
     }
     None
 }
+
+pub fn load_private_fonts() -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn AddFontResourceExW(lpszFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
+        fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
+    }
+    const FR_PRIVATE: u32 = 0x10;
+    let dir = std::fs::read_dir(config::config_dir().join("fonts")).ok()?;
+    let cwd = std::env::current_dir().ok()?;
+    let mut entries: Vec<_> = dir.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    // 收集当前所有字体文件的完整路径
+    let mut new_paths: Vec<String> = Vec::new();
+    for entry in &entries {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "ttf" && ext != "otf" { continue; }
+        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
+        new_paths.push(full.to_string_lossy().to_string());
+    }
+
+    let mut registered = match REGISTERED_FONTS.lock() {
+        Ok(g) => g,
+        Err(_) => return None,
+    };
+    let old_paths = std::mem::replace(&mut *registered, new_paths);
+
+    for old in &old_paths {
+        if !registered.contains(old) {
+            let ws: Vec<u16> = std::ffi::OsStr::new(old).encode_wide().chain(Some(0)).collect();
+            unsafe { RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+        }
+    }
+    for f in registered.iter() {
+        if !old_paths.contains(f) {
+            let ws: Vec<u16> = std::ffi::OsStr::new(f).encode_wide().chain(Some(0)).collect();
+            unsafe { AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+        }
+    }
+
+    // 返回第一个字体的家族名（给没有配 _font 的场景自动选择）
+    for entry in &entries {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "ttf" && ext != "otf" { continue; }
+        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
+        if let Ok(data) = std::fs::read(&full) { if let Some(name) = read_font_family(&data) { return Some(name); } }
+    }
+    None
+}
+
+pub fn scan_font_families() -> Vec<String> {
+    let dir = match std::fs::read_dir(config::config_dir().join("fonts")) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let cwd = std::env::current_dir().ok();
+    let mut result: Vec<String> = Vec::new();
+    let mut entries: Vec<_> = dir.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in &entries {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "ttf" && ext != "otf" { continue; }
+        let full = if path.is_absolute() { path } else if let Some(ref cwd) = cwd { cwd.join(&path) } else { continue; };
+        if let Ok(data) = std::fs::read(&full) {
+            if let Some(name) = read_font_family(&data) {
+                if !result.contains(&name) {
+                    result.push(name);
+                }
+            }
+        }
+    }
+    result
+}
+
+static REGISTERED_FONTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// 程序退出时注销所有私有字体，释放文件句柄
+pub fn unload_private_fonts() {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
+    }
+    const FR_PRIVATE: u32 = 0x10;
+    let mut registered = match REGISTERED_FONTS.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    for path in registered.iter() {
+        let ws: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(Some(0)).collect();
+        unsafe { RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+    }
+    registered.clear();
+}
+
+pub static MAIN_HWND: AtomicUsize = AtomicUsize::new(0);
 
 // ── 匹配 ────────────────────────────────────────────────────────
 
@@ -641,13 +722,31 @@ fn pinyin_substring_match(inp: &str, key: &str, overrides: &HashMap<char, Vec<St
     false
 }
 
+/// 拼音首字母匹配：输入逐个字符匹配每个中文字拼音的首字母
+/// 如 input="fq" → key="番茄小说"：f→番(fan), q→茄(qie)
+fn pinyin_first_letter_match(inp: &str, key: &str, overrides: &HashMap<char, Vec<String>>) -> bool {
+    let mut inp_chars = inp.chars();
+    for c in key.chars() {
+        let Some(inp_c) = inp_chars.next() else {
+            return true;
+        };
+        let readings = get_readings(c, overrides);
+        let matched = readings.iter().any(|r| r.starts_with(inp_c));
+        if !matched {
+            return false;
+        }
+    }
+    inp_chars.next().is_none()
+}
+
 /// 返回匹配层级：
 ///   Some(1) = 精确匹配（key）
 ///   Some(2) = 前缀匹配（key）
 ///   Some(3) = 子串匹配（key）
 ///   Some(4) = 拼音前缀（输入为 ASCII 且 ≥ 2 字符）
 ///   Some(5) = 拼音子串
-///   Some(6) = 模糊匹配（key，输入至少 2 字符）
+///   Some(6) = 拼音首字母（输入为 ASCII 且 ≥ 2 字符）
+///   Some(7) = 模糊匹配（key，输入至少 2 字符）
 ///   None    = 不匹配
 /// 参数 fuzzy_enabled/pinyin_enabled 控制对应分支是否跳过。
 pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: bool, pinyin_enabled: bool, overrides: &HashMap<char, Vec<String>>) -> Option<u8> {
@@ -681,55 +780,15 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: 
         if key_has_chinese && pinyin_substring_match(&lower_input, &k, overrides) {
             return Some(5);
         }
+        // 6：拼音首字母（fq → 番茄）
+        if key_has_chinese && pinyin_first_letter_match(&lower_input, &k, overrides) {
+            return Some(6);
+        }
     }
 
-    // 6：模糊匹配
+    // 7：模糊匹配
     if fuzzy_enabled && input.chars().count() >= 2 && fuzzy_match(&inp, &k) {
-        return Some(6);
-    }
-    None
-}
-
-/// 扫描 fonts/ 目录，注册第一个字体并返回其家族名称
-pub fn load_private_fonts() -> Option<String> {
-    use std::os::windows::ffi::OsStrExt;
-    #[link(name = "gdi32")]
-    extern "system" {
-        fn AddFontResourceExW(
-            lpszFilename: PCWSTR,
-            fl: u32,
-            pdv: *const std::ffi::c_void,
-        ) -> i32;
-    }
-    const FR_PRIVATE: u32 = 0x10;
-
-    let dir = std::fs::read_dir("fonts").ok()?;
-    let cwd = std::env::current_dir().ok()?;
-
-    let mut entries: Vec<_> = dir.flatten().collect();
-    // 按文件名排序，保证"第一个"稳定
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in &entries {
-        let path = entry.path();
-        let ext = path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if ext != "ttf" && ext != "otf" {
-            continue;
-        }
-        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
-        let ws: Vec<u16> = full.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe {
-            AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
-        }
-        // 读取家族名称
-        if let Ok(data) = std::fs::read(&full) {
-            if let Some(name) = read_font_family(&data) {
-                return Some(name);
-            }
-        }
+        return Some(7);
     }
     None
 }

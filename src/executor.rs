@@ -31,8 +31,7 @@ pub fn execute(_key: &str, val: &str, query: &str) {
         }
         let mut cmd_line = to_w(cmd);
         unsafe {
-            let mut si = STARTUPINFOW::default();
-            si.cb = size_of::<STARTUPINFOW>() as u32;
+            let si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
             let mut pi = PROCESS_INFORMATION::default();
             let _ = CreateProcessW(
                 PCWSTR::null(),                           // lpApplicationName

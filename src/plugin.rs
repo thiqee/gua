@@ -4,14 +4,31 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::fs;
+#[cfg(debug_assertions)]
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::config;
 use crate::state::to_w;
+
+#[allow(unused_variables)]
+pub fn plog(msg: &str) {
+    #[cfg(debug_assertions)] {
+        let path = config::config_dir().join("panic.log");
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "plugin: {msg}");
+        }
+    }
+}
 
 // ── Win32 extern ──────────────────────────────────────────────
 
+#[allow(clippy::upper_case_acronyms)]
 type HMODULE = *mut std::ffi::c_void;
+#[allow(clippy::upper_case_acronyms)]
 type FARPROC = Option<unsafe extern "system" fn() -> isize>;
 
 #[link(name = "kernel32")]
@@ -58,8 +75,6 @@ pub struct GuaApi {
 #[repr(C)]
 pub struct PluginVtable {
     pub vtable_size: u32,
-    pub name: *const i8,
-    pub version: *const i8,
     pub init: Option<unsafe extern "C" fn() -> i32>,
     pub on_hotkey: Option<unsafe extern "C" fn(user_id: i32)>,
     pub on_tick: Option<unsafe extern "C" fn(user_id: i32)>,
@@ -70,6 +85,24 @@ pub struct PluginVtable {
 }
 
 type GuaPluginLoadFn = unsafe extern "C" fn(api: *const GuaApi, vtable: *mut PluginVtable) -> i32;
+
+// ── 插件元信息（从 plugin.json 读取） ──────────────────────────
+
+#[derive(Clone, Debug)]
+pub struct PluginMeta {
+    pub name: String,
+    pub binary: String,
+    pub version: String,
+    pub description: String,
+    pub author: String,
+    pub dir: PathBuf,
+}
+
+static mut PLUGIN_METAS: ST<Vec<PluginMeta>> = ST::new(Vec::new());
+
+pub fn plugin_metas() -> &'static Vec<PluginMeta> {
+    unsafe { PLUGIN_METAS.r() }
+}
 
 // ── 内部状态 ──────────────────────────────────────────────────
 
@@ -83,10 +116,21 @@ struct LoadedPlugin {
     internal_to_user: HashMap<i32, i32>,
 }
 
+impl Drop for LoadedPlugin {
+    fn drop(&mut self) {
+        unsafe { let _ = FreeLibrary(self.lib); }
+    }
+}
+
 use windows::Win32::Foundation::HWND;
 
 /// 单线程 UnsafeCell 包装（无运行时借用检查）
 /// 安全前提：全局状态只在一个线程（主线程消息循环）中访问
+///
+/// # Safety
+/// Sync 是无条件实现的，因为 ST 的所有公开访问方法（r/w）都是 unsafe，
+/// 调用方必须自行保证线程安全。T 中通常包含 !Send/!Sync 的裸指针，
+/// 但在单线程架构下这是安全的。
 struct ST<T>(UnsafeCell<T>);
 unsafe impl<T> Sync for ST<T> {}
 
@@ -95,6 +139,7 @@ impl<T> ST<T> {
     /// 获取不可变引用（单线程安全，无并发写入）
     unsafe fn r(&self) -> &T { &*self.0.get() }
     /// 获取可变引用（单线程安全，无并发读取）
+    #[allow(clippy::mut_from_ref)]
     unsafe fn w(&self) -> &mut T { &mut *self.0.get() }
 }
 
@@ -104,12 +149,25 @@ static PLUGIN_CONFIGS: ST<Option<HashMap<String, HashMap<String, String>>>> = ST
 static TIMER_MAP: ST<Option<HashMap<i32, (usize, i32)>>> = ST::new(None);
 static GUA_HWND: AtomicUsize = AtomicUsize::new(0);
 
+#[allow(static_mut_refs)]
+static mut GUA_API: GuaApi = GuaApi {
+    api_version: 1,
+    struct_size: std::mem::size_of::<GuaApi>() as u32,
+    register_hotkey: Some(register_hotkey_impl),
+    unregister_hotkey: Some(unregister_hotkey_impl),
+    get_config: Some(get_config_impl),
+    set_timer: Some(set_timer_impl),
+    kill_timer: Some(kill_timer_impl),
+    log: Some(log_impl),
+    hwnd: 0,
+};
+
 fn gua_hwnd() -> HWND {
     HWND(GUA_HWND.load(Ordering::Relaxed) as *mut std::ffi::c_void)
 }
 
 thread_local! {
-    static CURRENT_PLUGIN_IDX: Cell<usize> = Cell::new(usize::MAX);
+    static CURRENT_PLUGIN_IDX: Cell<usize> = const { Cell::new(usize::MAX) };
 }
 
 // ── GuaApi 实现 ───────────────────────────────────────────────
@@ -117,9 +175,15 @@ thread_local! {
 unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i32 {
     let idx = CURRENT_PLUGIN_IDX.get();
     if idx == usize::MAX {
+        plog("register_hotkey: 不在插件上下文中");
         return -1;
     }
-    if user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+    if idx >= PLUGINS.r().len() {
+        plog("register_hotkey: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
+        return -1;
+    }
+    if !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
+        plog(&format!("register_hotkey: user_id {} 超出范围", user_id));
         return -1;
     }
     {
@@ -130,8 +194,10 @@ unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i
     }
     let internal_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + user_id;
     if !RegisterHotKey(gua_hwnd(), internal_id, mods, vk).as_bool() {
+        plog(&format!("register_hotkey: RegisterHotKey 失败 mods={} vk={}", mods, vk));
         return -1;
     }
+    plog(&format!("register_hotkey: 成功 mods={} vk={} user_id={} internal_id={}", mods, vk, user_id, internal_id));
     let plugins = PLUGINS.w();
     plugins[idx].user_to_internal.insert(user_id, internal_id);
     plugins[idx].internal_to_user.insert(internal_id, user_id);
@@ -141,6 +207,10 @@ unsafe extern "C" fn register_hotkey_impl(mods: u32, vk: u32, user_id: i32) -> i
 unsafe extern "C" fn unregister_hotkey_impl(user_id: i32) {
     let idx = CURRENT_PLUGIN_IDX.get();
     if idx == usize::MAX {
+        return;
+    }
+    if idx >= PLUGINS.r().len() {
+        plog("unregister_hotkey: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
         return;
     }
     let plugins = PLUGINS.w();
@@ -154,6 +224,10 @@ unsafe extern "C" fn unregister_hotkey_impl(user_id: i32) {
 unsafe extern "C" fn get_config_impl(key: *const i8, buf: *mut i8, buf_size: i32) -> i32 {
     let idx = CURRENT_PLUGIN_IDX.get();
     if idx == usize::MAX || key.is_null() {
+        return -1;
+    }
+    if idx >= PLUGINS.r().len() {
+        plog("get_config: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
         return -1;
     }
     let plugin_name = PLUGINS.r()[idx].name.clone();
@@ -190,7 +264,11 @@ unsafe extern "C" fn get_config_impl(key: *const i8, buf: *mut i8, buf_size: i32
 
 unsafe extern "C" fn set_timer_impl(interval_ms: u32, user_id: i32) -> i32 {
     let idx = CURRENT_PLUGIN_IDX.get();
-    if idx == usize::MAX || user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+    if idx == usize::MAX || !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
+        return -1;
+    }
+    if idx >= PLUGINS.r().len() {
+        plog("set_timer: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
         return -1;
     }
     let timer_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + 256 + user_id;
@@ -205,7 +283,11 @@ unsafe extern "C" fn set_timer_impl(interval_ms: u32, user_id: i32) -> i32 {
 
 unsafe extern "C" fn kill_timer_impl(user_id: i32) {
     let idx = CURRENT_PLUGIN_IDX.get();
-    if idx == usize::MAX || user_id < 0 || user_id >= MAX_HOTKEYS_PER_PLUGIN {
+    if idx == usize::MAX || !(0..MAX_HOTKEYS_PER_PLUGIN).contains(&user_id) {
+        return;
+    }
+    if idx >= PLUGINS.r().len() {
+        plog("kill_timer: 插件在 gua_plugin_load 阶段调用了 API（违反契约，API 只能在 init 中调用）");
         return;
     }
     let timer_id = PLUGIN_HOTKEY_BASE + idx as i32 * MAX_HOTKEYS_PER_PLUGIN + 256 + user_id;
@@ -242,6 +324,50 @@ unsafe extern "C" fn log_impl(level: i32, msg: *const i8) {
         ));
 }
 
+// ── plugin.json 解析 ───────────────────────────────────────────
+
+fn extract_json_str(content: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"\\s*:\\s*\"", key);
+    let start = content.find(&pattern)?;
+    let start = start + pattern.len();
+    let end = content[start..].find('"')?;
+    let raw = &content[start..start + end];
+    Some(raw.replace("\\\"", "\"").replace("\\\\", "\\"))
+}
+
+fn parse_plugin_json(content: &str, dir: &Path) -> Option<PluginMeta> {
+    let name = extract_json_str(content, "name")?;
+    if name.is_empty() { return None; }
+    let binary = extract_json_str(content, "binary").unwrap_or_else(|| format!("{}.dll", name));
+    let version = extract_json_str(content, "version").unwrap_or_default();
+    let description = extract_json_str(content, "description").unwrap_or_default();
+    let author = extract_json_str(content, "author").unwrap_or_default();
+    Some(PluginMeta { name, binary, version, description, author, dir: dir.to_path_buf() })
+}
+
+fn scan_plugin_metas(plugin_dir: &Path) -> Vec<PluginMeta> {
+    let mut metas = Vec::new();
+    let entries: Vec<_> = match fs::read_dir(plugin_dir) {
+        Ok(iter) => iter.flatten().collect(),
+        Err(_) => return metas,
+    };
+    for entry in &entries {
+        let dir_path = entry.path();
+        if !dir_path.is_dir() { continue; }
+        let json_path = dir_path.join("plugin.json");
+        if !json_path.is_file() { continue; }
+        let content = match fs::read_to_string(&json_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if let Some(meta) = parse_plugin_json(&content, &dir_path) {
+            plog(&format!("发现插件: {}", meta.name));
+            metas.push(meta);
+        }
+    }
+    metas
+}
+
 // ── 公共 API ──────────────────────────────────────────────────
 
 /// 加载所有插件（在窗口创建后、消息循环前调用）
@@ -254,79 +380,62 @@ pub unsafe fn load_all(
     plugin_configs: &HashMap<String, HashMap<String, String>>,
 ) {
     GUA_HWND.store(hwnd.0 as usize, Ordering::Relaxed);
+    unload_current_plugins();
     *PLUGIN_CONFIGS.w() = Some(plugin_configs.clone());
     *TIMER_MAP.w() = Some(HashMap::new());
     *PLUGINS.w() = Vec::new();
+    *PLUGIN_METAS.w() = Vec::new();
+    GUA_API.hwnd = hwnd.0 as u64;
 
-    // 基于 exe 路径定位 plugins/ 目录
-    let plugin_dir = match get_exe_dir() {
-        Some(d) => d.join("plugins"),
-        None => {
-            eprintln!("plugin: 无法获取 exe 路径");
-            return;
-        }
-    };
-    if !plugin_dir.is_dir() {
-        return;
-    }
-
-    let mut entries: Vec<_> = match std::fs::read_dir(&plugin_dir) {
-        Ok(iter) => iter.flatten().collect(),
-        Err(_) => return,
-    };
-    entries.sort_by_key(|e| e.file_name());
+    let plugin_dir = config::config_dir().join("plugins");
+    if !plugin_dir.is_dir() { return; }
 
     let configs = PLUGIN_CONFIGS.r();
-    let configs = configs.as_ref().unwrap();
+    let configs = match configs.as_ref() { Some(c) => c, None => return };
 
-    for entry in &entries {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("dll") {
+    // 1. 扫描所有 plugin.json
+    let metas = scan_plugin_metas(&plugin_dir);
+    *PLUGIN_METAS.w() = metas.clone();
+
+    // 2. 逐个加载已启用的插件
+    for meta in &metas {
+        let name = &meta.name;
+        let enabled = configs
+            .get(name.as_str())
+            .and_then(|c| c.get("enabled"))
+            .is_none_or(|v| v != "false");
+
+        if !enabled {
+            plog(&format!("{}: 已禁用，跳过", name));
             continue;
         }
-        let file_stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        if file_stem.is_empty() {
+
+        let dll_path = meta.dir.join(&meta.binary);
+        if !dll_path.is_file() {
+            plog(&format!("{}: 未找到 {}", name, meta.binary));
             continue;
         }
 
-        let full_path = to_w(&path.to_string_lossy());
+        let full_path = to_w(&dll_path.to_string_lossy());
         let lib = LoadLibraryW(full_path.as_ptr());
         if lib.is_null() {
-            eprintln!("plugin: 加载 {} 失败", file_stem);
+            plog(&format!("{}: LoadLibraryW 失败", name));
             continue;
         }
 
-        // 查找 gua_plugin_load 导出函数
         let load_fn_name = b"gua_plugin_load\0";
-        let proc = GetProcAddress(lib, load_fn_name.as_ptr());
-        if proc.is_none() {
-            eprintln!("plugin: {} 缺少 gua_plugin_load 导出", file_stem);
-            let _ = FreeLibrary(lib);
-            continue;
-        }
-        let load_fn: GuaPluginLoadFn = std::mem::transmute(proc.unwrap());
-
-        // 构造 GuaApi（泄漏到堆上，插件持有 &'static 引用）
-        let gua_api = Box::leak(Box::new(GuaApi {
-            api_version: 1,
-            struct_size: std::mem::size_of::<GuaApi>() as u32,
-            register_hotkey: Some(register_hotkey_impl),
-            unregister_hotkey: Some(unregister_hotkey_impl),
-            get_config: Some(get_config_impl),
-            set_timer: Some(set_timer_impl),
-            kill_timer: Some(kill_timer_impl),
-            log: Some(log_impl),
-            hwnd: hwnd.0 as u64,
-        }));
+        let proc = match GetProcAddress(lib, load_fn_name.as_ptr()) {
+            Some(p) => p,
+            None => {
+                plog(&format!("{}: 缺少 gua_plugin_load 导出", name));
+                let _ = FreeLibrary(lib);
+                continue;
+            }
+        };
+        let load_fn: GuaPluginLoadFn = std::mem::transmute(proc);
 
         let mut vtable = PluginVtable {
             vtable_size: 0,
-            name: ptr::null(),
-            version: ptr::null(),
             init: None,
             on_hotkey: None,
             on_tick: None,
@@ -338,73 +447,63 @@ pub unsafe fn load_all(
         let idx = PLUGINS.r().len();
         CURRENT_PLUGIN_IDX.set(idx);
 
-        let ret = load_fn(gua_api as *const GuaApi, &mut vtable as *mut PluginVtable);
+        let load_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_fn(&GUA_API as *const GuaApi, &mut vtable as *mut PluginVtable)
+        }));
 
         CURRENT_PLUGIN_IDX.set(usize::MAX);
 
-        if ret != 0 || vtable.name.is_null() {
-            eprintln!("plugin: {} 初始化失败 (ret={})", file_stem, ret);
+        let ret = match load_result {
+            Ok(r) => r,
+            Err(_) => {
+                plog(&format!("{}: gua_plugin_load 发生 panic", name));
+                let _ = FreeLibrary(lib);
+                continue;
+            }
+        };
+
+        if ret != 0 {
+            plog(&format!("{}: 加载失败 (ret={})", name, ret));
             let _ = FreeLibrary(lib);
             continue;
         }
 
-        let name_str = CStr::from_ptr(vtable.name).to_string_lossy().to_string();
         if vtable.vtable_size > std::mem::size_of::<PluginVtable>() as u32 {
             vtable.vtable_size = std::mem::size_of::<PluginVtable>() as u32;
-        }
-
-        // 用 vtable 中的 name 检查 enabled 开关（config section 名应与插件声明的 name 一致）
-        if configs
-            .get(&name_str)
-            .and_then(|c| c.get("enabled"))
-            .map_or(false, |v| v == "false")
-        {
-            eprintln!("plugin: {} 已禁用", name_str);
-            let _ = FreeLibrary(lib);
-            CURRENT_PLUGIN_IDX.set(usize::MAX);
-            continue;
         }
 
         PLUGINS.w().push(LoadedPlugin {
             lib,
             vtable,
-            name: name_str.clone(),
+            name: name.clone(),
             user_to_internal: HashMap::new(),
             internal_to_user: HashMap::new(),
         });
 
-        CURRENT_PLUGIN_IDX.set(usize::MAX);
-
-        // 调用 init（设置 CURRENT_PLUGIN_IDX 以便 init 中调用 register_hotkey）
+        // 调用 init
         CURRENT_PLUGIN_IDX.set(idx);
         let init_result = std::panic::catch_unwind(|| {
             let init_fn = PLUGINS.r()[idx].vtable.init;
-            if let Some(f) = init_fn {
-                f()
-            } else {
-                0
-            }
+            if let Some(f) = init_fn { f() } else { 0 }
         });
         CURRENT_PLUGIN_IDX.set(usize::MAX);
 
         match init_result {
-            Ok(0) => {}
+            Ok(0) => plog(&format!("{}: init 成功", name)),
             Ok(r) => {
-                eprintln!("plugin: {} init 返回非零 {}", name_str, r);
+                plog(&format!("{}: init 返回非零 {}", name, r));
                 cleanup_plugin(idx);
-                continue;
             }
             Err(_) => {
-                eprintln!("plugin: {} init 发生 panic", name_str);
+                plog(&format!("{}: init 发生 panic", name));
                 cleanup_plugin(idx);
-                continue;
             }
         }
     }
 
     let count = PLUGINS.r().len();
     if count > 0 {
-        eprintln!("plugin: 已加载 {} 个插件", count);
+        plog(&format!("已加载 {} 个插件", count));
     }
 }
 
@@ -413,18 +512,7 @@ pub unsafe fn load_all(
 /// # Safety
 /// - 需在窗口销毁后、进程退出前调用，只调用一次
 pub unsafe fn unload_all() {
-    let count = PLUGINS.r().len();
-    for i in (0..count).rev() {
-        let cleanup_fn = PLUGINS.r()[i].vtable.cleanup;
-        let _ = std::panic::catch_unwind(|| {
-            if let Some(f) = cleanup_fn {
-                f();
-            }
-        });
-        unregister_all_for_plugin(i);
-        let lib = PLUGINS.r()[i].lib;
-        let _ = FreeLibrary(lib);
-    }
+    unload_current_plugins();
     PLUGINS.w().clear();
 }
 
@@ -435,10 +523,11 @@ pub unsafe fn unload_all() {
 /// - 需在插件已加载后调用
 pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
     let plugins = PLUGINS.r();
-    for i in 0..plugins.len() {
-        if plugins[i].internal_to_user.contains_key(&internal_id) {
-            let user_id = plugins[i].internal_to_user[&internal_id];
-            let f = plugins[i].vtable.on_hotkey;
+    for (i, plugin) in plugins.iter().enumerate() {
+        if plugin.internal_to_user.contains_key(&internal_id) {
+            let user_id = plugin.internal_to_user[&internal_id];
+            plog(&format!("dispatch_hotkey: 插件[{}] user_id={}", i, user_id));
+            let f = plugin.vtable.on_hotkey;
             CURRENT_PLUGIN_IDX.set(i);
             let _ = std::panic::catch_unwind(|| {
                 if let Some(f) = f {
@@ -450,25 +539,6 @@ pub unsafe fn dispatch_hotkey(internal_id: i32) -> bool {
         }
     }
     false
-}
-
-/// 通知所有插件配置已重载
-///
-/// # Safety
-/// - 需在插件已加载后调用
-pub unsafe fn notify_reload(configs: &HashMap<String, HashMap<String, String>>) {
-    *PLUGIN_CONFIGS.w() = Some(configs.clone());
-    let count = PLUGINS.r().len();
-    for i in 0..count {
-        CURRENT_PLUGIN_IDX.set(i);
-        let f = PLUGINS.r()[i].vtable.on_config_reload;
-        let _ = std::panic::catch_unwind(|| {
-            if let Some(f) = f {
-                f();
-            }
-        });
-        CURRENT_PLUGIN_IDX.set(usize::MAX);
-    }
 }
 
 /// 分发窗口消息给插件，返回 true 表示插件已处理
@@ -516,10 +586,18 @@ pub fn is_plugin_hotkey(hotkey_id: i32) -> bool {
 
 // ── 内部辅助 ──────────────────────────────────────────────────
 
+unsafe fn unload_current_plugins() {
+    for i in (0..PLUGINS.r().len()).rev() {
+        let cleanup_fn = PLUGINS.r()[i].vtable.cleanup;
+        let _ = std::panic::catch_unwind(|| {
+            if let Some(f) = cleanup_fn { f(); }
+        });
+        unregister_all_for_plugin(i);
+    }
+}
+
 unsafe fn cleanup_plugin(idx: usize) {
     unregister_all_for_plugin(idx);
-    let lib = PLUGINS.r()[idx].lib;
-    let _ = FreeLibrary(lib);
     PLUGINS.w().remove(idx);
 }
 
@@ -534,11 +612,4 @@ unsafe fn unregister_all_for_plugin(idx: usize) {
     if let Some(ref mut map) = *TIMER_MAP.w() {
         map.retain(|_, &mut (i, _)| i != idx);
     }
-}
-
-/// 获取 gua.exe 所在目录
-fn get_exe_dir() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
 }

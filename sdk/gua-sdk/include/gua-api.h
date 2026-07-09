@@ -9,9 +9,7 @@
 //   int32_t GUA_PLUGIN_EXPORT gua_plugin_load(const GuaApi* a, PluginVtable* v) {
 //       api = a;
 //       v->vtable_size = sizeof(PluginVtable);
-//       v->name = "my-plugin";
-//       v->version = "0.1.0";
-//       v->init = my_init;
+//   v->init = my_init;
 //       v->on_hotkey = my_on_hotkey;
 //       return 0;
 //   }
@@ -89,8 +87,6 @@ typedef struct {
 
 typedef struct {
     uint32_t vtable_size;             // 调用方写入 sizeof(PluginVtable)
-    const char* name;                 // 插件名称（UTF-8，静态字符串）
-    const char* version;              // 插件版本
 
     // 初始化，在此函数中注册热键
     // 返回 0 表示成功
@@ -116,6 +112,12 @@ typedef struct {
 
 // 插件必须导出的唯一函数
 // 返回值: 0=成功，非0=失败
+//
+// 契约：本函数中只允许填写 PluginVtable，
+//       禁止调用 GuaApi 的任何方法（register_hotkey/get_config/set_timer 等）。
+//       所有 API 调用必须在 init 回调中进行。
+//       原因：本函数返回时插件尚未注册到 Gua 的插件表，
+//       此时调用 API 会因索引越界被拒绝（返回 -1）。
 typedef int32_t (GUA_PLUGIN_ENTRY*)(const GuaApi* api, PluginVtable* vtable);
 
 #define GUA_PLUGIN_EXPORT __declspec(dllexport)

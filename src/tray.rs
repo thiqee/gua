@@ -12,9 +12,9 @@ static GUA_ICO_DATA: &[u8] = include_bytes!("../gua.ico");
 
 const TRAY_MSG: u32 = super::TRAY_MSG;
 const TRAY_ID: u32 = super::TRAY_ID;
-const IDM_TOGGLE: u16 = super::IDM_TOGGLE;
 const IDM_OPEN_CONFIG: u16 = super::IDM_OPEN_CONFIG;
 const IDM_EXIT: u16 = super::IDM_EXIT;
+const IDM_SETTINGS: u16 = super::IDM_SETTINGS;
 
 static TRAY_HWND: AtomicUsize = AtomicUsize::new(0);
 static TRAY_HICON: AtomicUsize = AtomicUsize::new(0);
@@ -101,8 +101,8 @@ pub unsafe fn show_menu(hwnd: HWND) {
         _ => return,
     };
 
-    let _ = AppendMenuW(menu, MF_STRING, IDM_TOGGLE as usize, w!("打开 Gua"));
-    let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("打开配置文件"));
+    let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS as usize, w!("设置"));
+    let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_CONFIG as usize, w!("配置文件夹"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
     let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT as usize, w!("退出"));
 
