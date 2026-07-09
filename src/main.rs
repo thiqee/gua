@@ -214,6 +214,7 @@ fn main() -> Result<()> {
             settings::close_settings();
         }
         plugin::unload_all();
+        crate::state::unload_private_fonts();
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         if ptr != 0 {
             let s = &mut *(ptr as *mut AppState);

@@ -316,10 +316,10 @@ pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
 // ── 黑名单 ──────────────────────────────────────────────────────
 
 /// 解析 _pinyin_overrides 多音字追加读音配置
-/// 格式：_pinyin_overrides = 茄=qie, 了=le  （逗号分隔）
+/// 格式：_pinyin_overrides = 茄(qie);了(le)
 /// 或分行：
-///   _pinyin_overrides = 茄=qie
-///   _pinyin_overrides = 了=le
+///   _pinyin_overrides = 茄(qie)
+///   _pinyin_overrides = 了(le)
 /// 每个字对应一个追加读音列表（不覆盖 crate 默认读音）
 pub fn cfg_pinyin_overrides(entries: &[config::Entry], key: &str) -> HashMap<char, Vec<String>> {
     let mut map: HashMap<char, Vec<String>> = HashMap::new();
@@ -619,6 +619,25 @@ pub fn scan_font_families() -> Vec<String> {
 }
 
 static REGISTERED_FONTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// 程序退出时注销所有私有字体，释放文件句柄
+pub fn unload_private_fonts() {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
+    }
+    const FR_PRIVATE: u32 = 0x10;
+    let mut registered = match REGISTERED_FONTS.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    for path in registered.iter() {
+        let ws: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(Some(0)).collect();
+        unsafe { RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+    }
+    registered.clear();
+}
 
 pub static MAIN_HWND: AtomicUsize = AtomicUsize::new(0);
 

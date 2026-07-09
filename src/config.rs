@@ -84,23 +84,23 @@ fn parse_line(line: &str, cur_cat: &Option<String>, pending: &mut Option<Entry>)
     let eq_pos = line.find('=')?;
     let field = line[..eq_pos].trim();
     let raw_val = line[eq_pos + 1..].trim();
-    if FIELD_NAMES.contains(&field) {
-        let val = unquote(raw_val);
-        if pending.is_none() {
-            *pending = Some(Entry { key: String::new(), value: String::new(), category: cur_cat.clone(), description: None });
-        }
-        if let Some(ref mut e) = pending {
-            match field {
-                "key" => e.key = val,
-                "value" => e.value = val,
-                "description" => e.description = if val.is_empty() { None } else { Some(val) },
-                _ => {}
-            }
-        }
-        None
-    } else {
-        Some(Entry { key: field.to_string(), value: unquote(raw_val), category: cur_cat.clone(), description: None })
+    if field.starts_with('_') {
+        return Some(Entry { key: field.to_string(), value: unquote(raw_val), category: cur_cat.clone(), description: None });
     }
+    if !FIELD_NAMES.contains(&field) { return None; }
+    let val = unquote(raw_val);
+    if pending.is_none() {
+        *pending = Some(Entry { key: String::new(), value: String::new(), category: cur_cat.clone(), description: None });
+    }
+    if let Some(ref mut e) = pending {
+        match field {
+            "key" => e.key = val,
+            "value" => e.value = val,
+            "description" => e.description = if val.is_empty() { None } else { Some(val) },
+            _ => {}
+        }
+    }
+    None
 }
 
 fn flush_pending(pending: &mut Option<Entry>) -> Option<Entry> {
@@ -128,9 +128,9 @@ fn load_raw(path: &Path) -> Vec<Entry> {
             if let Some(e) = flush_pending(&mut pending) { entries.push(e); }
             continue;
         }
-        if let Some(e) = parse_line(trimmed, &current_category, &mut pending) {
-            entries.push(e);
-        }
+    if let Some(e) = parse_line(trimmed, &current_category, &mut pending) {
+        entries.push(e);
+    }
     }
     if let Some(e) = flush_pending(&mut pending) { entries.push(e); }
     entries
@@ -156,7 +156,7 @@ fn save_raw(path: &Path, entries: &[Entry]) {
     for (cat, group) in &groups {
         if let Some(ref name) = cat { let _ = writeln!(out, "\n[{}]", name); }
         for e in group {
-            if e.key.starts_with('_') || e.description.is_none() {
+            if e.key.starts_with('_') {
                 let _ = writeln!(out, "{} = \"{}\"", e.key, e.value);
             } else {
                 let _ = writeln!(out);

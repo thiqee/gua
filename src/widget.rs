@@ -55,7 +55,7 @@ pub trait Widget {
     fn tick(&mut self) -> bool { false }
     fn settings_key(&self) -> Option<&str> { None }
     fn on_ctrl_key(&mut self, _vk: u32) -> bool { false }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { unimplemented!() }
+    fn set_options(&mut self, _opts: Vec<String>) {}
 }
 
 // ── helpers ──
@@ -1479,15 +1479,6 @@ impl Dropdown {
         }
     }
 
-    pub fn set_options(&mut self, options: Vec<String>) {
-        if options.is_empty() { return; }
-        let cur = self.options.get(self.selected).cloned();
-        self.options = options;
-        self.selected = self.options.iter().position(|o| Some(o) == cur.as_ref()).unwrap_or(0);
-        if self.selected >= self.options.len() { self.selected = 0; }
-        self.popup_w = 0.0;
-    }
-
     fn calc_popup_w(&mut self, res: &D2DRes) {
         let base_w = self.r.right - self.r.left;
         let mut max_w = base_w;
@@ -1517,7 +1508,14 @@ impl Widget for Dropdown {
         self.options.get(self.selected).map(|s| s.as_str()).unwrap_or("")
     }
     fn settings_key(&self) -> Option<&str> { self.settings_key.as_deref() }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn set_options(&mut self, options: Vec<String>) {
+        if options.is_empty() { return; }
+        let cur = self.options.get(self.selected).cloned();
+        self.options = options;
+        self.selected = self.options.iter().position(|o| Some(o) == cur.as_ref()).unwrap_or(0);
+        if self.selected >= self.options.len() { self.selected = 0; }
+        self.popup_w = 0.0;
+    }
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
         self.hovered = x >= self.r.left && x <= self.r.right && y >= self.r.top && y <= self.r.bottom;

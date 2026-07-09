@@ -212,12 +212,9 @@ fn build_widgets(cat: usize, cards: &mut Vec<D2D_RECT_F>, content_h: &mut f32, s
             let font_names = scan_font_families();
             let current_font = sv(settings, "_font", "Segoe UI");
             let font_options = if font_names.is_empty() {
-                let mut v = vec![current_font.clone()];
-                if current_font != "Segoe UI" { v.push("Segoe UI".to_string()); }
-                v
+                vec!["Segoe UI".to_string()]
             } else {
                 let mut opts = font_names;
-                if !opts.contains(&current_font) { opts.insert(0, current_font.clone()); }
                 if !opts.contains(&"Segoe UI".to_string()) { opts.push("Segoe UI".to_string()); }
                 opts
             };
@@ -639,7 +636,7 @@ unsafe fn build_plugins_tab(
     let mut y = TITLE_H + CONTENT_PAD;
 
     // 公告提示
-    let mut notice = Notice::new("每个插件有独立的配置文件夹，请点击\"打开文件夹\"前往配置插件的具体功能。");
+    let mut notice = Notice::new("插件系统正在制作，暂未开放");
     notice.set_bounds(D2D_RECT_F { left: inner_l, top: y, right: inner_l + inner_w, bottom: y + 44.0 });
     w.push(Box::new(notice));
     y += 48.0;
@@ -718,6 +715,11 @@ pub unsafe fn open_settings(_h: HWND, r: &GuaRenderer) {
         let _ = ShowWindow(s.hwnd, SW_SHOW);
         let _ = SetForegroundWindow(s.hwnd);
         return;
+    }
+
+    let s_main = main_state();
+    if !s_main.is_null() {
+        (*s_main).entries = config::load_codes();
     }
 
     let inst = match GetModuleHandleW(None) {
@@ -926,10 +928,11 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
 
             // Rebuild widgets if needed
             let mut need_rebuild = s.cat != s.sel_cat;
+            let mut codes_modified = false;
             if !need_rebuild && s.cat == 2 {
                 let cur_search = s.widgets.get(1).map(|w| w.text().to_string()).unwrap_or_default();
                 if cur_search != s.codes_search { need_rebuild = true; s.codes_search = cur_search; }
-                if s.codes_version > 0 { need_rebuild = true; s.codes_version = 0; }
+                if s.codes_version > 0 { need_rebuild = true; codes_modified = true; s.codes_version = 0; }
             }
             if !need_rebuild && s.cat == 3 && s.plugins_version > 0 {
                 need_rebuild = true;
@@ -937,7 +940,7 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
             }
             if need_rebuild {
                 sync_settings_entries(s);
-                if s.cat == 2 { sync_codes_entries(s); }
+                if s.cat == 2 && !codes_modified { sync_codes_entries(s); }
                 let was_cat_switch = s.sel_cat != s.cat;
                 s.sel_cat = s.cat;
                 if was_cat_switch { s.scroll_y = 0.0; }
@@ -1375,14 +1378,17 @@ pub unsafe extern "system" fn settings_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
                         if handled_idx < s.widgets.len() {
                             match s.widgets[handled_idx].cmd() {
                                 WidgetCmd::FontRefresh => {
+                                    crate::state::load_private_fonts();
                                     let font_names = crate::state::scan_font_families();
-                                    let current_font = s.widgets.iter().find(|w| w.settings_key() == Some("_font")).map(|w| w.text().to_string()).unwrap_or_default();
-                                    let mut opts = font_names;
-                                    if !opts.contains(&current_font) { opts.insert(0, current_font.clone()); }
-                                    if let Some(dd_w) = s.widgets.iter_mut().find(|w| w.settings_key() == Some("_font")) {
-                                        if let Some(d) = dd_w.as_any_mut().downcast_mut::<Dropdown>() {
-                                            d.set_options(opts);
-                                        }
+                                    let opts = if font_names.is_empty() {
+                                        vec!["Segoe UI".to_string()]
+                                    } else {
+                                        let mut o = font_names;
+                                        if !o.contains(&"Segoe UI".to_string()) { o.push("Segoe UI".to_string()); }
+                                        o
+                                    };
+                                    if let Some(w) = s.widgets.iter_mut().find(|w| w.settings_key() == Some("_font")) {
+                                        w.set_options(opts);
                                     }
                                     let _ = SetTimer(Some(h), 101, 50, None);
                                     let _ = InvalidateRect(Some(h), None, true);
