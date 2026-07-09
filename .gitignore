@@ -9,11 +9,25 @@ config.toml
 # pi 配置（含系统提示词、项目工作流规则等）
 .pi/
 
+# opencode AI 配置
+AGENTS.md
+.opencode/
+
+# 内部方案/文档（非项目代码）
+Gua_D2D_Plan.md
+Gua*方案.md
+textinput-实现报告.md
+已知问题.md
+HarmonyOS_Design_Guide.md
+
 # 插件目录（插件未开放前整个忽略）
 /plugins/
 
 # 无用脚手架
 src/lib.rs
+
+# 二进制
+*.dll
 
 # 编译产物
 gua.exe
