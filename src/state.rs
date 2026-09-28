@@ -5,16 +5,16 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{LazyLock, Mutex};
-use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
-use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::DirectComposition::*;
+use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::*;
 
 use crate::config;
 
@@ -45,7 +45,7 @@ pub const VK_ESCAPE: u32 = 0x1B;
 pub const VK_RETURN: u32 = 0x0D;
 
 #[link(name = "user32")]
-extern "system" {
+unsafe extern "system" {
     pub fn RegisterHotKey(hwnd: HWND, id: i32, fs_modifiers: u32, vk: u32) -> BOOL;
     pub fn SetFocus(hwnd: HWND) -> HWND;
     pub fn UnregisterHotKey(hwnd: HWND, id: i32) -> BOOL;
@@ -65,10 +65,15 @@ pub const GCS_COMPSTR: u32 = 0x0008;
 pub const GCS_RESULTSTR: u32 = 0x0800;
 
 #[link(name = "imm32")]
-extern "system" {
+unsafe extern "system" {
     pub fn ImmGetContext(hwnd: HWND) -> isize;
     pub fn ImmSetCompositionWindow(himc: isize, lpCompForm: *const COMPOSITIONFORM) -> BOOL;
-    pub fn ImmGetCompositionStringW(himc: isize, dwIndex: u32, lpBuf: *mut std::ffi::c_void, dwBufLen: u32) -> u32;
+    pub fn ImmGetCompositionStringW(
+        himc: isize,
+        dwIndex: u32,
+        lpBuf: *mut std::ffi::c_void,
+        dwBufLen: u32,
+    ) -> u32;
     pub fn ImmReleaseContext(hwnd: HWND, himc: isize) -> BOOL;
 }
 
@@ -93,11 +98,19 @@ pub struct GuaRenderer {
 }
 
 pub fn gua_renderer(s: &AppState) -> Option<&GuaRenderer> {
-    if s.renderer.is_null() { None } else { Some(unsafe { &*s.renderer }) }
+    if s.renderer.is_null() {
+        None
+    } else {
+        Some(unsafe { &*s.renderer })
+    }
 }
 
 pub fn gua_renderer_mut(s: &mut AppState) -> Option<&mut GuaRenderer> {
-    if s.renderer.is_null() { None } else { Some(unsafe { &mut *s.renderer }) }
+    if s.renderer.is_null() {
+        None
+    } else {
+        Some(unsafe { &mut *s.renderer })
+    }
 }
 
 pub fn color_to_d2d(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
@@ -115,25 +128,48 @@ pub fn color_to_d2d(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
 ///
 /// # Safety
 /// 纯数值运算，无安全要求
-pub unsafe fn hiword(d: u32) -> u32 { (d >> 16) & 0xFFFF }
+pub unsafe fn hiword(d: u32) -> u32 {
+    (d >> 16) & 0xFFFF
+}
 
 pub fn cfg_str(entries: &[config::Entry], key: &str, default: &str) -> String {
-    entries.iter().find(|e| e.key == key).map(|e| e.value.clone()).unwrap_or_else(|| default.to_string())
+    entries
+        .iter()
+        .find(|e| e.key == key)
+        .map(|e| e.value.clone())
+        .unwrap_or_else(|| default.to_string())
 }
 pub fn cfg_f32(entries: &[config::Entry], key: &str, default: f32) -> f32 {
-    entries.iter().find(|e| e.key == key).and_then(|e| e.value.parse().ok()).unwrap_or(default)
+    entries
+        .iter()
+        .find(|e| e.key == key)
+        .and_then(|e| e.value.parse().ok())
+        .unwrap_or(default)
 }
 pub fn cfg_i32(entries: &[config::Entry], key: &str, default: i32) -> i32 {
-    entries.iter().find(|e| e.key == key).and_then(|e| e.value.parse().ok()).unwrap_or(default)
+    entries
+        .iter()
+        .find(|e| e.key == key)
+        .and_then(|e| e.value.parse().ok())
+        .unwrap_or(default)
 }
 pub fn cfg_usize(entries: &[config::Entry], key: &str, default: usize) -> usize {
-    entries.iter().find(|e| e.key == key).and_then(|e| e.value.parse().ok()).unwrap_or(default)
+    entries
+        .iter()
+        .find(|e| e.key == key)
+        .and_then(|e| e.value.parse().ok())
+        .unwrap_or(default)
 }
 pub fn cfg_bool(entries: &[config::Entry], key: &str, default: bool) -> bool {
-    entries.iter().find(|e| e.key == key).map(|e| e.value.eq_ignore_ascii_case("true") || e.value == "1").unwrap_or(default)
+    entries
+        .iter()
+        .find(|e| e.key == key)
+        .map(|e| e.value.eq_ignore_ascii_case("true") || e.value == "1")
+        .unwrap_or(default)
 }
 pub fn cfg_color(entries: &[config::Entry], key: &str, default: u32) -> u32 {
-    entries.iter()
+    entries
+        .iter()
         .find(|e| e.key == key)
         .and_then(|e| u32::from_str_radix(e.value.trim_start_matches('#'), 16).ok())
         .unwrap_or(default)
@@ -148,7 +184,7 @@ pub const MEM_PRIO_VERY_LOW: u32 = 1;
 pub const MEM_PRIO_NORMAL: u32 = 5;
 
 #[link(name = "kernel32")]
-extern "system" {
+unsafe extern "system" {
     pub fn SetProcessInformation(h: HANDLE, class: i32, info: *const u8, size: u32) -> i32;
 }
 
@@ -206,16 +242,18 @@ pub fn entry_type(val: &str) -> &'static str {
 /// - `h` 必须是有效的窗口句柄
 /// - 需在窗口创建后才可调用
 pub unsafe fn center_win(h: HWND, w: i32, hh: i32, ratio_x: f32, ratio_y: f32) {
-    let mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
-    let mut mi = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    if GetMonitorInfoW(mon, &mut mi).as_bool() {
-        let rc = mi.rcWork;
-        let x = rc.left + ((rc.right - rc.left - w) as f32 * ratio_x) as i32;
-        let y = rc.top + ((rc.bottom - rc.top - hh) as f32 * ratio_y) as i32;
-        let _ = SetWindowPos(h, Some(HWND_TOP), x, y, w, hh, SWP_NOZORDER);
+    unsafe {
+        let mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(mon, &mut mi).as_bool() {
+            let rc = mi.rcWork;
+            let x = rc.left + ((rc.right - rc.left - w) as f32 * ratio_x) as i32;
+            let y = rc.top + ((rc.bottom - rc.top - hh) as f32 * ratio_y) as i32;
+            let _ = SetWindowPos(h, Some(HWND_TOP), x, y, w, hh, SWP_NOZORDER);
+        }
     }
 }
 
@@ -295,7 +333,8 @@ fn vk_code(name: &str) -> Option<u32> {
 /// 解析 "Mod1+Mod2+Key" 格式热键字符串，返回 (modifiers, vk)。
 /// 至少需要两个键，第一个必须是修饰键，最多五个部分。
 pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
-    let parts: Vec<&str> = s.split('+')
+    let parts: Vec<&str> = s
+        .split('+')
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
         .collect();
@@ -326,7 +365,9 @@ pub fn cfg_pinyin_overrides(entries: &[config::Entry], key: &str) -> HashMap<cha
     for entry in entries.iter().filter(|e| e.key == key) {
         for part in entry.value.split(';') {
             let part = part.trim();
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(paren_pos) = part.find('(') {
                 let ch = part[..paren_pos].trim().chars().next();
                 let inner = part[paren_pos + 1..].trim_end_matches(')').trim();
@@ -365,48 +406,47 @@ pub fn cfg_blacklist(entries: &[config::Entry], key: &str) -> Vec<String> {
 /// - 需在支持 PROCESS_QUERY_LIMITED_INFORMATION 权限的进程中调用
 /// - 返回值为进程名快照，多线程场景下前台窗口可能已变化
 pub unsafe fn get_foreground_exe() -> Option<String> {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn OpenProcess(
-            dwDesiredAccess: u32,
-            bInheritHandle: i32,
-            dwProcessId: u32,
-        ) -> HANDLE;
-        fn QueryFullProcessImageNameW(
-            hProcess: HANDLE,
-            dwFlags: u32,
-            lpExeName: *mut u16,
-            lpdwSize: &mut u32,
-        ) -> BOOL;
-    }
+    unsafe {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> HANDLE;
+            fn QueryFullProcessImageNameW(
+                hProcess: HANDLE,
+                dwFlags: u32,
+                lpExeName: *mut u16,
+                lpdwSize: &mut u32,
+            ) -> BOOL;
+        }
 
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 
-    let hwnd = GetForegroundWindow();
-    if hwnd.0.is_null() {
-        return None;
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.0.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 260];
+        let mut size = buf.len() as u32;
+        let result =
+            if QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut size).as_bool() {
+                let s = String::from_utf16_lossy(&buf[..size as usize]);
+                std::path::Path::new(&s)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_lowercase())
+            } else {
+                None
+            };
+        let _ = CloseHandle(process);
+        result
     }
-    let mut pid: u32 = 0;
-    GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    if pid == 0 {
-        return None;
-    }
-    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-    if process.0.is_null() {
-        return None;
-    }
-    let mut buf = [0u16; 260];
-    let mut size = buf.len() as u32;
-    let result = if QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut size).as_bool() {
-        let s = String::from_utf16_lossy(&buf[..size as usize]);
-        std::path::Path::new(&s)
-            .file_name()
-            .map(|f| f.to_string_lossy().to_lowercase())
-    } else {
-        None
-    };
-    let _ = CloseHandle(process);
-    result
 }
 
 // ── app state ───────────────────────────────────────────────────
@@ -477,63 +517,127 @@ pub struct AppState {
 
 fn read_font_family(data: &[u8]) -> Option<String> {
     let buf = |off: usize, len: usize| -> Option<&[u8]> { data.get(off..off + len) };
-    let u16be = |off: usize| -> Option<u16> { let b = buf(off, 2)?; Some(u16::from_be_bytes([b[0], b[1]])) };
-    let u32be = |off: usize| -> Option<u32> { let b = buf(off, 4)?; Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]])) };
+    let u16be = |off: usize| -> Option<u16> {
+        let b = buf(off, 2)?;
+        Some(u16::from_be_bytes([b[0], b[1]]))
+    };
+    let u32be = |off: usize| -> Option<u32> {
+        let b = buf(off, 4)?;
+        Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
     let num_tables = u16be(4)? as usize;
     let mut name_off = None;
     let mut name_len = None;
     for i in 0..num_tables {
         let entry = 12 + i * 16;
         let tag = buf(entry, 4)?;
-        if tag == b"name" { name_off = Some(u32be(entry + 8)? as usize); name_len = Some(u32be(entry + 12)? as usize); break; }
+        if tag == b"name" {
+            name_off = Some(u32be(entry + 8)? as usize);
+            name_len = Some(u32be(entry + 12)? as usize);
+            break;
+        }
     }
-    let name_off = name_off?; let name_len = name_len?;
+    let name_off = name_off?;
+    let name_len = name_len?;
     let nt = buf(name_off, name_len)?;
     let format = u16be(name_off)?;
     let count = u16be(name_off + 2)? as usize;
     let string_off = u16be(name_off + 4)? as usize;
-    let name_record_off = if format == 0 { name_off + 6 }
-        else if format == 1 { let lang_tag_count = u16be(name_off + 6)? as usize; name_off + 6 + 2 + lang_tag_count * 12 }
-        else { return None; };
-    struct Rec { platform: u16, encoding: u16, lang: u16, offset: usize, length: usize }
+    let name_record_off = if format == 0 {
+        name_off + 6
+    } else if format == 1 {
+        let lang_tag_count = u16be(name_off + 6)? as usize;
+        name_off + 6 + 2 + lang_tag_count * 12
+    } else {
+        return None;
+    };
+    struct Rec {
+        platform: u16,
+        encoding: u16,
+        lang: u16,
+        offset: usize,
+        length: usize,
+    }
     let mut candidates: Vec<Rec> = Vec::new();
     let mut fallback1: Vec<Rec> = Vec::new();
     for i in 0..count {
         let r = name_record_off + i * 12;
-        let platform = u16be(r)?; let encoding = u16be(r + 2)?; let lang = u16be(r + 4)?;
-        let name_id = u16be(r + 6)?; let length = u16be(r + 8)? as usize; let offset = u16be(r + 10)? as usize;
-        if name_id == 16 { candidates.push(Rec { platform, encoding, lang, offset, length }); }
-        if name_id == 1 { fallback1.push(Rec { platform, encoding, lang, offset, length }); }
+        let platform = u16be(r)?;
+        let encoding = u16be(r + 2)?;
+        let lang = u16be(r + 4)?;
+        let name_id = u16be(r + 6)?;
+        let length = u16be(r + 8)? as usize;
+        let offset = u16be(r + 10)? as usize;
+        if name_id == 16 {
+            candidates.push(Rec {
+                platform,
+                encoding,
+                lang,
+                offset,
+                length,
+            });
+        }
+        if name_id == 1 {
+            fallback1.push(Rec {
+                platform,
+                encoding,
+                lang,
+                offset,
+                length,
+            });
+        }
     }
-    if candidates.is_empty() { candidates = fallback1; }
+    if candidates.is_empty() {
+        candidates = fallback1;
+    }
     for c in &candidates {
         if c.platform == 3 && c.lang == 0x0409 {
-            let Some(start) = string_off.checked_add(c.offset) else { continue; };
-            if start + c.length > nt.len() { continue; }
+            let Some(start) = string_off.checked_add(c.offset) else {
+                continue;
+            };
+            if start + c.length > nt.len() {
+                continue;
+            }
             let raw = &nt[start..start + c.length];
             if c.encoding == 1 || c.encoding == 10 {
                 let mut u16s = Vec::with_capacity(c.length / 2);
-                for j in (0..c.length).step_by(2) { if j + 2 <= raw.len() { u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]])); } }
+                for j in (0..c.length).step_by(2) {
+                    if j + 2 <= raw.len() {
+                        u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]]));
+                    }
+                }
                 return Some(String::from_utf16_lossy(&u16s));
             }
         }
     }
     for c in &candidates {
         if c.platform == 3 {
-            let Some(start) = string_off.checked_add(c.offset) else { continue; };
-            if start + c.length > nt.len() { continue; }
+            let Some(start) = string_off.checked_add(c.offset) else {
+                continue;
+            };
+            if start + c.length > nt.len() {
+                continue;
+            }
             let raw = &nt[start..start + c.length];
             if c.encoding == 1 || c.encoding == 10 {
                 let mut u16s = Vec::with_capacity(c.length / 2);
-                for j in (0..c.length).step_by(2) { if j + 2 <= raw.len() { u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]])); } }
+                for j in (0..c.length).step_by(2) {
+                    if j + 2 <= raw.len() {
+                        u16s.push(u16::from_be_bytes([raw[j], raw[j + 1]]));
+                    }
+                }
                 return Some(String::from_utf16_lossy(&u16s));
             }
         }
     }
     for c in &candidates {
         if c.platform == 1 {
-            let Some(start) = string_off.checked_add(c.offset) else { continue; };
-            if start + c.length > nt.len() { continue; }
+            let Some(start) = string_off.checked_add(c.offset) else {
+                continue;
+            };
+            if start + c.length > nt.len() {
+                continue;
+            }
             return Some(String::from_utf8_lossy(&nt[start..start + c.length]).to_string());
         }
     }
@@ -543,7 +647,7 @@ fn read_font_family(data: &[u8]) -> Option<String> {
 pub fn load_private_fonts() -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "gdi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn AddFontResourceExW(lpszFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
         fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
     }
@@ -557,9 +661,19 @@ pub fn load_private_fonts() -> Option<String> {
     let mut new_paths: Vec<String> = Vec::new();
     for entry in &entries {
         let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        if ext != "ttf" && ext != "otf" { continue; }
-        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "ttf" && ext != "otf" {
+            continue;
+        }
+        let full = if path.is_absolute() {
+            path.clone()
+        } else {
+            cwd.join(&path)
+        };
         new_paths.push(full.to_string_lossy().to_string());
     }
 
@@ -571,24 +685,48 @@ pub fn load_private_fonts() -> Option<String> {
 
     for old in &old_paths {
         if !registered.contains(old) {
-            let ws: Vec<u16> = std::ffi::OsStr::new(old).encode_wide().chain(Some(0)).collect();
-            unsafe { RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+            let ws: Vec<u16> = std::ffi::OsStr::new(old)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            unsafe {
+                RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
+            }
         }
     }
     for f in registered.iter() {
         if !old_paths.contains(f) {
-            let ws: Vec<u16> = std::ffi::OsStr::new(f).encode_wide().chain(Some(0)).collect();
-            unsafe { AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+            let ws: Vec<u16> = std::ffi::OsStr::new(f)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            unsafe {
+                AddFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
+            }
         }
     }
 
     // 返回第一个字体的家族名（给没有配 _font 的场景自动选择）
     for entry in &entries {
         let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        if ext != "ttf" && ext != "otf" { continue; }
-        let full = if path.is_absolute() { path.clone() } else { cwd.join(&path) };
-        if let Ok(data) = std::fs::read(&full) { if let Some(name) = read_font_family(&data) { return Some(name); } }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "ttf" && ext != "otf" {
+            continue;
+        }
+        let full = if path.is_absolute() {
+            path.clone()
+        } else {
+            cwd.join(&path)
+        };
+        if let Ok(data) = std::fs::read(&full) {
+            if let Some(name) = read_font_family(&data) {
+                return Some(name);
+            }
+        }
     }
     None
 }
@@ -604,9 +742,21 @@ pub fn scan_font_families() -> Vec<String> {
     entries.sort_by_key(|e| e.file_name());
     for entry in &entries {
         let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        if ext != "ttf" && ext != "otf" { continue; }
-        let full = if path.is_absolute() { path } else if let Some(ref cwd) = cwd { cwd.join(&path) } else { continue; };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "ttf" && ext != "otf" {
+            continue;
+        }
+        let full = if path.is_absolute() {
+            path
+        } else if let Some(ref cwd) = cwd {
+            cwd.join(&path)
+        } else {
+            continue;
+        };
         if let Ok(data) = std::fs::read(&full) {
             if let Some(name) = read_font_family(&data) {
                 if !result.contains(&name) {
@@ -624,7 +774,7 @@ static REGISTERED_FONTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 pub fn unload_private_fonts() {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "gdi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn RemoveFontResourceExW(lpFilename: PCWSTR, fl: u32, pdv: *const std::ffi::c_void) -> i32;
     }
     const FR_PRIVATE: u32 = 0x10;
@@ -633,8 +783,13 @@ pub fn unload_private_fonts() {
         Err(_) => return,
     };
     for path in registered.iter() {
-        let ws: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(Some(0)).collect();
-        unsafe { RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null()); }
+        let ws: Vec<u16> = std::ffi::OsStr::new(path)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        unsafe {
+            RemoveFontResourceExW(PCWSTR(ws.as_ptr()), FR_PRIVATE, std::ptr::null());
+        }
     }
     registered.clear();
 }
@@ -749,7 +904,14 @@ fn pinyin_first_letter_match(inp: &str, key: &str, overrides: &HashMap<char, Vec
 ///   Some(7) = 模糊匹配（key，输入至少 2 字符）
 ///   None    = 不匹配
 /// 参数 fuzzy_enabled/pinyin_enabled 控制对应分支是否跳过。
-pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: bool, pinyin_enabled: bool, overrides: &HashMap<char, Vec<String>>) -> Option<u8> {
+pub fn match_level(
+    input: &str,
+    key: &str,
+    case_sensitive: bool,
+    fuzzy_enabled: bool,
+    pinyin_enabled: bool,
+    overrides: &HashMap<char, Vec<String>>,
+) -> Option<u8> {
     use pinyin::ToPinyin;
     let (inp, k) = if case_sensitive {
         (input.to_string(), key.to_string())
@@ -769,7 +931,10 @@ pub fn match_level(input: &str, key: &str, case_sensitive: bool, fuzzy_enabled: 
     }
 
     // 4-5：拼音匹配（逐字尝试，支持多音字覆写）
-    if pinyin_enabled && input.chars().count() >= 2 && input.chars().all(|c| c.is_ascii_alphabetic()) {
+    if pinyin_enabled
+        && input.chars().count() >= 2
+        && input.chars().all(|c| c.is_ascii_alphabetic())
+    {
         // key 不含中文时跳过拼音匹配，走模糊匹配（避免非中文 key 被拼音分支截胡）
         let key_has_chinese = key.chars().any(|c| c.to_pinyin().is_some());
         // 拼音匹配始终用小写输入，不受 _case_sensitive 影响（读音数据本身是小写的）

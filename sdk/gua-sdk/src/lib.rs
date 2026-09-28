@@ -10,16 +10,11 @@ use std::ptr;
 pub struct GuaApi {
     pub api_version: u32,
     pub struct_size: u32,
-    pub register_hotkey: Option<
-        unsafe extern "C" fn(mods: u32, vk: u32, user_id: i32) -> i32,
-    >,
+    pub register_hotkey: Option<unsafe extern "C" fn(mods: u32, vk: u32, user_id: i32) -> i32>,
     pub unregister_hotkey: Option<unsafe extern "C" fn(user_id: i32)>,
-    pub get_config: Option<
-        unsafe extern "C" fn(key: *const i8, buf: *mut i8, buf_size: i32) -> i32,
-    >,
-    pub set_timer: Option<
-        unsafe extern "C" fn(interval_ms: u32, user_id: i32) -> i32,
-    >,
+    pub get_config:
+        Option<unsafe extern "C" fn(key: *const i8, buf: *mut i8, buf_size: i32) -> i32>,
+    pub set_timer: Option<unsafe extern "C" fn(interval_ms: u32, user_id: i32) -> i32>,
     pub kill_timer: Option<unsafe extern "C" fn(user_id: i32)>,
     pub log: Option<unsafe extern "C" fn(level: i32, msg: *const i8)>,
     pub hwnd: u64,
@@ -87,9 +82,10 @@ pub trait GuaPlugin {
 macro_rules! gua_plugin_export {
     ($plugin_type:ty) => {
         static PLUGIN: $plugin_type = $plugin_type {};
-        static mut GUA_API: Option<&'static $crate::GuaApi> = None;
+        static GUA_API: std::sync::OnceLock<Option<&'static $crate::GuaApi>> =
+            std::sync::OnceLock::new();
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn gua_plugin_load(
             api: *const $crate::GuaApi,
             vtable: *mut $crate::PluginVtable,
@@ -98,7 +94,7 @@ macro_rules! gua_plugin_export {
                 return -1;
             }
             let api_ref = &*api;
-            GUA_API = Some(api_ref);
+            let _ = GUA_API.set(Some(api_ref));
 
             let v = &mut *vtable;
             v.vtable_size = std::mem::size_of::<$crate::PluginVtable>() as u32;
@@ -112,7 +108,7 @@ macro_rules! gua_plugin_export {
         }
 
         unsafe extern "C" fn init_wrapper<T: $crate::GuaPlugin>() -> i32 {
-            let api = GUA_API.unwrap();
+            let api = GUA_API.get().unwrap().unwrap();
             PLUGIN.init(api)
         }
 
@@ -133,7 +129,9 @@ macro_rules! gua_plugin_export {
         }
 
         unsafe extern "C" fn on_wndproc_wrapper<T: $crate::GuaPlugin>(
-            msg: u32, wp: u64, lp: i64,
+            msg: u32,
+            wp: u64,
+            lp: i64,
         ) -> i32 {
             if PLUGIN.on_wndproc(msg, wp, lp) { 1 } else { 0 }
         }

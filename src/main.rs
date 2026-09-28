@@ -3,7 +3,7 @@
 
 #![cfg(target_os = "windows")]
 #![windows_subsystem = "windows"]
-#![allow(static_mut_refs)]
+mod autostart;
 mod config;
 mod draw;
 mod executor;
@@ -11,23 +11,23 @@ mod plugin;
 mod settings;
 mod state;
 mod theme;
-mod widget;
 mod tray;
+mod widget;
 mod window;
 mod wndproc;
 
 use std::ptr;
 use std::sync::atomic::Ordering;
 
-use windows::core::*;
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::*;
 
 #[link(name = "kernel32")]
-extern "system" {
+unsafe extern "system" {
     fn CreateMutexW(
         lpMutexAttributes: *const std::ffi::c_void,
         bInitialOwner: BOOL,
@@ -42,7 +42,11 @@ fn main() -> Result<()> {
     let mutex_name = to_w("Local\\Gua-Singleton-Mutex");
     let mutex = unsafe { CreateMutexW(std::ptr::null(), BOOL(0), PCWSTR(mutex_name.as_ptr())) };
     if mutex.0.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        if !mutex.0.is_null() { unsafe { let _ = CloseHandle(mutex); } }
+        if !mutex.0.is_null() {
+            unsafe {
+                let _ = CloseHandle(mutex);
+            }
+        }
         return Ok(());
     }
 
@@ -88,11 +92,16 @@ fn main() -> Result<()> {
             Some(v) => v,
             None => {
                 eprintln!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space");
-                let _ = std::fs::write(config::config_dir().join("panic.log"), format!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space\n"));
+                let _ = std::fs::write(
+                    config::config_dir().join("panic.log"),
+                    format!("config: 热键 \"{hotkey_str}\" 无法识别，回退为 Alt+Space\n"),
+                );
                 (MOD_ALT, VK_SPACE)
             }
         };
         let blacklist = cfg_blacklist(&settings, "_blacklist");
+        // 开机自启动：把注册表项刷新为当前 exe 路径（程序被移动后仍能自启）
+        autostart::apply(cfg_bool(&settings, "_auto_start", false));
         let plugin_configs = config::build_plugin_configs(&settings);
         let entries = config::load_codes();
 
@@ -107,7 +116,9 @@ fn main() -> Result<()> {
             lpszClassName: PCWSTR(cn.as_ptr()),
             ..Default::default()
         };
-        if RegisterClassW(&wc) == 0 { return Err(windows::core::Error::from(HRESULT(-2147467259))); }
+        if RegisterClassW(&wc) == 0 {
+            return Err(windows::core::Error::from(HRESULT(-2147467259)));
+        }
 
         let cn2 = to_w("Gua");
         let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST;
@@ -116,7 +127,14 @@ fn main() -> Result<()> {
             PCWSTR(cn2.as_ptr()),
             w!("Gua"),
             WS_POPUP,
-            0, 0, width, 1, None, None, Some(inst.into()), None,
+            0,
+            0,
+            width,
+            1,
+            None,
+            None,
+            Some(inst.into()),
+            None,
         )?;
 
         let fp = font_px(font_size, dpi);
@@ -130,7 +148,12 @@ fn main() -> Result<()> {
             filtered_indices: Vec::new(),
             sel_index: 0,
             scroll_offset: 0,
-            input_rect: RECT { left: PD, top: PD, right: width - PD, bottom: PD + fp + 24 },
+            input_rect: RECT {
+                left: PD,
+                top: PD,
+                right: width - PD,
+                bottom: PD + fp + 24,
+            },
             visible: false,
             text_format: None,
             status_text_format: None,
@@ -205,7 +228,9 @@ fn main() -> Result<()> {
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
-            if ret.0 == 0 || ret.0 == -1 { break; }
+            if ret.0 == 0 || ret.0 == -1 {
+                break;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
